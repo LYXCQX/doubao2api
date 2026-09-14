@@ -8,17 +8,46 @@
 [![GitHub Issues](https://img.shields.io/github/issues/SeiShonagon520/doubao2api)](https://github.com/SeiShonagon520/doubao2api/issues)
 [![GitHub Last Commit](https://img.shields.io/github/last-commit/SeiShonagon520/doubao2api)](https://github.com/SeiShonagon520/doubao2api/commits/main)
 
-逆向豆包（Doubao）客户端 API，为 AI 智能体提供免费的多模态能力。通过 OpenAI 兼容接口，让任何纯文本模型也能识图、读文件、生成图片/音乐/视频。
+> 🚀 逆向字节跳动豆包（Doubao）最新网页端，提供标准 OpenAI 兼容接口（Chat / 多模态识图 / 文档理解 / 生图 / 视频 / 音乐）。支持无痕会话、风控自愈与高并发平滑调度。
 
-起初只是想给自己的 Hermes Agent（基于 DeepSeek V4 Flash）补上识图能力，结果越写越多，索性做成了完整的逆向客户端和 API 服务。
+---
+
+## 📖 项目背景与缘起
+
+本项目灵感来源于优秀的开源项目 [wangchuxiaoji-oss/doubao2api](https://github.com/wangchuxiaoji-oss/doubao2api)，原项目为社区提供了极佳的豆包接口封装思路，特此向原作者致敬！
+
+然而，随着近期**豆包官方网页端架构全面升级**，原有的纯 HTTP 请求端点、会话校验与前端签名机制相继失效，导致旧版服务在最新环境下已无法正常发起对话，日常依赖该接口的翻译插件（如沉浸式翻译）和本地 AI 智能体纷纷罢工。
+
+为了在豆包最新环境下恢复稳定、长效的 API 调用体验，本项目对底层架构进行了**全新重构与深度重写**：改用真实浏览器运行时桥接（Playwright Browser Fetch Hook），并针对日常高频调用场景中常见的“历史记录刷屏”、“并发撞风控”等痛点进行了系统性解决。
+
+---
+
+## ✨ 核心特性与重构改进
+
+- 🔄 **适配豆包最新网页架构**：底层基于真实浏览器上下文与前端 Fetch Hook 自动完成签名鉴权与环境注入，完美兼容最新版豆包，无惧前端混淆算法频繁迭代。
+- 🔥 **即用即焚（无痕会话）**：API 请求完成后自动在豆包云端后台销毁临时对话（默认开启），彻底告别网页侧边栏被成百上千条 API 历史记录刷屏污染的烦恼。
+- 🛡️ **自愈式反爬与并发平滑调度**：
+  - **并发平滑队列**：内置请求平滑调度锁（默认 200ms 最小间隔），专为沉浸式翻译等瞬间并发突发的场景优化，避免瞬间冲撞 WAF 限速。
+  - **假警报自愈解除**：真实验证码 DOM 探测，若屏幕上无实际滑块弹窗则自动解除拦截标记，告别服务偶发假死。
+- 🌐 **浏览器免配置自动降级（Auto Fallback）**：初次部署无需手动下载数百兆的驱动包，启动时自动检测并直接复用本机已安装的 Google Chrome 或 Microsoft Edge，开箱即跑。
+- 🖥️ **现代化 Admin 控制台**：内置可视化 Web 管理面板，支持扫码登录、Cookie 热导入、实时日志监控、一键解除风控拦截以及无头/窗口模式热切换。
+- 🐳 **全平台开箱即用部署**：提供便携式相对路径启动脚本（Windows `start_server.bat` / Linux `start_server.sh`）以及一键持久化存储的 `docker-compose.yml`。
+- 📦 **完整多模态能力**：
+  - **多模态对话**：多轮对话、深度思考（思维链）、联网搜索，完整的 ChatCompletion 能力。
+  - **多模态理解**：识图、读 PDF/Word/Excel/代码等 60+ 种文件格式，纯文本模型也能"看懂"图片和文档。
+  - **多媒体生成**：免费生成图片（文生图、图生图）、音乐、视频，Agent 的输出不再局限于文字。
+  - **文件中转站**：通过 `/v1/files` 可上传任意文件（最大 1GB）获得一个永久 TOS URI，随时换取高速下载链接。
+
+⚠️ **注意**：豆包网页客户端模型**不支持原生 Function Calling / Tool Use**，因此不适合需要操作本地代码仓库的 Coding Agent；非常适合对话翻译、知识问答及多媒体辅助。
 
 ## 目录
 
-- [这个项目能做什么](#这个项目能做什么)
+- [项目背景与缘起](#-项目背景与缘起)
+- [核心特性与重构改进](#-核心特性与重构改进)
 - [原理](#原理)
 - [快速开始](#快速开始)
   - [安装](#安装)
-  - [Docker 部署（可选）](#docker-部署可选)
+  - [Docker 部署（推荐）](#docker-部署推荐)
   - [QR 扫码登录（推荐，跨平台）](#qr-扫码登录推荐跨平台)
   - [从 Session 文件创建客户端](#从-session-文件创建客户端)
   - [流式输出](#流式输出)
@@ -36,52 +65,12 @@
   - [Admin Dashboard](#admin-dashboard)
   - [模型列表](#模型列表)
   - [端点详细规范](#端点详细规范)
-    - [GET /health](#get-health)
-    - [GET /v1/models](#get-v1models)
-    - [POST /v1/chat/completions](#post-v1chatcompletions)
-    - [POST /v1/files](#post-v1files)
-    - [GET /v1/files/download](#get-v1filesdownload)
-    - [POST /v1/images/upload](#post-v1imagesupload)
-    - [POST /v1/images/generations](#post-v1imagesgenerations)
-    - [POST /v1/video/generations](#post-v1videogenerations)
-    - [POST /v1/audio/generations](#post-v1audiogenerations)
-    - [GET /auth/status](#get-authstatus)
-    - [POST /v1/session/qr-login](#post-v1sessionqr-login)
-    - [GET /admin](#get-admin)
   - [使用 OpenAI Python SDK](#使用-openai-python-sdk)
   - [使用 curl](#使用-curl)
 - [Bot ID](#bot-id)
 - [底层模型与路由](#底层模型与路由)
-  - [模型家族](#模型家族)
-  - [seed_intention 路由表](#seed_intention-路由表)
-  - [模式切换参数](#模式切换参数)
-  - [API 响应中的模型元数据](#api-响应中的模型元数据)
-  - [火山引擎 ARK API 模型名称参考](#火山引擎-ark-api-模型名称参考)
 - [技术细节](#技术细节)
-  - [认证流程](#认证流程)
-  - [请求格式](#请求格式)
-  - [SSE 事件类型](#sse-事件类型)
-  - [content_type 枚举](#content_type-枚举)
-  - [思考链提取](#思考链提取)
-  - [Session 过期与风控检测](#session-过期与风控检测)
-  - [msToken 与风控](#mstoken-与风控)
-  - [搜索工具调用捕获](#搜索工具调用捕获)
 - [项目结构](#项目结构)
-
-## 这个项目能做什么
-
-本项目适合为通用 AI 智能体（如 OpenClaw、Hermes 等对话/任务型 Agent）补全多模态能力。
-
-举个实际例子：我的 Hermes Agent 接入的是 DeepSeek V4 Flash——一个纯文本模型，看不了图、读不了文件、更不能生成多媒体内容。接入 doubao2api 之后，相当于给它装上了"眼睛"和"手"：
-
-- **多模态对话**：多轮对话、深度思考（思维链）、联网搜索，完整的 ChatCompletion 能力
-- **多模态理解**：识图、读 PDF/Word/Excel/代码等 60+ 种文件格式，纯文本模型也能"看懂"图片和文档
-- **多媒体生成**：免费生成图片（文生图、图生图）、音乐、视频，Agent 的输出不再局限于文字
-- **文件中转站**（奇淫技巧）：通过 `/v1/files` 可上传任意文件（最大 1GB）获得一个永久 TOS URI，之后随时凭这个 URI 调用 `/v1/files/download` 换取 7 天有效的下载链接，过期了再换一个就行。这意味着你可以把它当作**免费的跨机器文件传输通道**——Agent A 在服务器 A 上传文件拿到 URI，把 URI 传给 Agent B，Agent B 在另一台服务器上凭 URI 获取下载链接直接拉取文件。无需自建 OSS，无需打通内网，单文件最大 1GB，存储不过期。有兴趣的兄弟可以基于这个开做个文件中转，感觉会很不错
-- **即用即焚（无痕对话）**：请求完成后自动在豆包云端销毁该临时对话（默认开启），彻底防止网页端会话历史被 API 批量调用刷屏污染
-- **自愈式反爬风控与请求平滑**：内置真实验证码 DOM 探测、假警报自动解除、并发平滑调度队列，有效防止沉浸式翻译等并发突发调用触发 WAF 拦截
-
-⚠️ **不适合编程智能体**：豆包客户端模型**不支持 Function Calling / Tool Use**（无法调用外部工具如文件读写、终端命令、代码搜索等），因此**不适合**作为编程智能体（Claude Code、Codex、OpenCode 等）的后端模型。如果你需要的是能操作代码仓库的 coding agent，请选择原生支持工具调用的模型 API。
 
 ## 原理
 

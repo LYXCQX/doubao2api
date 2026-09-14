@@ -1734,7 +1734,6 @@ def create_app(
     @app.get("/admin", response_class=HTMLResponse)
     async def admin_dashboard(request: Request):
         """Serve the admin dashboard (QR login + system + API test + logs)."""
-        _check_auth(request)
         novnc_url = os.environ.get("DOUBAO_NOVNC_URL", "").strip()
         if not novnc_url:
             scheme = request.url.scheme
@@ -1747,11 +1746,14 @@ def create_app(
         from pathlib import Path
         html_path = Path(__file__).parent / "static" / "admin.html"
         html = html_path.read_text(encoding="utf-8")
-        return html.replace("{{NOVNC_URL}}", novnc_url)
+        auth_required = "true" if bool(api_key) else "false"
+        content = html.replace("{{NOVNC_URL}}", novnc_url).replace("{{AUTH_REQUIRED}}", auth_required)
+        return HTMLResponse(content=content, status_code=200)
 
+    @app.get("/")
     @app.get("/auth")
     async def auth_redirect(request: Request):
-        """Redirect /auth to /admin for backwards compatibility."""
+        """Redirect / and /auth to /admin for backwards compatibility and easy browser entry."""
         from fastapi.responses import RedirectResponse
         key = request.query_params.get("key", "")
         url = "/admin" + (f"?key={key}" if key else "")
@@ -1829,10 +1831,12 @@ def create_app(
 
         ok = await client.inject_cookies_and_reload(cookie_dict)
         return {
+            "status": "ok" if ok else "fail",
             "success": ok,
+            "logged_in": ok and client.is_ready,
             "cookies_count": len(cookie_dict),
             "has_sessionid": "sessionid" in cookie_dict,
-            "ready": client.is_ready
+            "ready": client.is_ready,
         }
 
     @app.post("/admin/api/probe")

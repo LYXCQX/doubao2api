@@ -7,15 +7,16 @@ Tests:
 3. Failure behavior: what happens when limit is exceeded
 
 Usage:
-    python tests/test_context_window.py --base-url http://103.237.92.203:9090
+    python tests/test_context_window.py --base-url http://127.0.0.1:9090
 """
 import argparse
 import json
+import os
 import time
 import httpx
 import sys
 
-BASE_URL = "http://103.237.92.203:9090"
+BASE_URL = os.environ.get("DOUBAO_BASE_URL", "http://127.0.0.1:9090")
 
 # Full OpenCode-style tool definitions (English, 8 tools)
 TOOLS = [

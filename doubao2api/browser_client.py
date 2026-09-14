@@ -151,13 +151,29 @@ class BrowserClient:
         # Prefer bundled Chromium to prevent collisions with user's existing Chrome processes
         chrome_channel = None
         if os.environ.get("DOUBAO_USE_SYSTEM_CHROME", "false").lower() == "true":
-            chrome_paths = [
-                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-                os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-            ]
-            if any(os.path.exists(p) for p in chrome_paths):
-                chrome_channel = "chrome"
+            import shutil
+            if os.name == "nt":
+                chrome_paths = [
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+                ]
+                if any(os.path.exists(p) for p in chrome_paths):
+                    chrome_channel = "chrome"
+            elif os.name == "posix":
+                import sys
+                if sys.platform == "darwin":
+                    mac_paths = [
+                        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                    ]
+                    if any(os.path.exists(p) for p in mac_paths):
+                        chrome_channel = "chrome"
+                else:
+                    for bin_name in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
+                        if shutil.which(bin_name):
+                            chrome_channel = "chrome"
+                            break
 
         launch_kwargs = {
             "headless": self.headless,
@@ -193,7 +209,7 @@ class BrowserClient:
             err_msg = str(e)
             if "Executable doesn't exist" in err_msg:
                 fallback_success = False
-                for fallback_channel in ("chrome", "msedge"):
+                for fallback_channel in ("chrome", "msedge", "chromium"):
                     try:
                         log.info("Bundled Chromium not installed. Attempting fallback to system '%s'...", fallback_channel)
                         kw = dict(launch_kwargs)

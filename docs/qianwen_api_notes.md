@@ -323,8 +323,8 @@ QIANWEN_BROWSER_DATA=/opt/doubao2api/.qianwen_browser
 ## 部署状态（2026-05-24）
 
 **已上线运行**，与豆包共用同一端点：
-- 端点: `http://103.237.92.203:9090/v1`
-- Key: `sk-doubao-6c109ee905c2c5150fa43a62acc0e056`
+- 端点: `http://127.0.0.1:9090/v1`
+- Key: `sk-doubao (或自定义 DOUBAO_API_KEY)`
 - 通过 model 字段路由：`qianwen-*` → 千问，`doubao-*` → 豆包
 
 ### OpenAI兼容模型名映射

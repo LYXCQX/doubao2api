@@ -4,22 +4,27 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Doubao 2API 控制台</title>
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<!-- Vue 3 with CDN fallback -->
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script>if(!window.Vue)document.write('<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"><\/script>')</script>
+<!-- Tailwind CSS with CDN fallback -->
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
-tailwind.config={theme:{extend:{colors:{
-brand:{50:'#eef2ff',100:'#e0e7ff',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81'},
-surface:{50:'#f8fafc',100:'#f1f5f9',200:'#e2e8f0',700:'#334155',800:'#1e293b',900:'#0f172a'}
-}}}}
+if(window.tailwind){
+  tailwind.config={theme:{extend:{colors:{
+    brand:{50:'#eef2ff',100:'#e0e7ff',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81'},
+    surface:{50:'#f8fafc',100:'#f1f5f9',200:'#e2e8f0',700:'#334155',800:'#1e293b',900:'#0f172a'}
+  }}}}
+}
 </script>
 <style>
 [v-cloak]{display:none}
 *{box-sizing:border-box}
-body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;margin:0}
 .sidebar-item{transition:all .15s}
 .sidebar-item:hover{background:rgba(99,102,241,.15)}
-.sidebar-item.active{background:rgba(99,102,241,.2);border-right:3px solid #6366f1}
-.glass{background:rgba(255,255,255,.03);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.06)}
+.sidebar-item.active{background:rgba(99,102,241,.2);border-right:3px solid #6366f1;color:#fff}
+.glass{background:rgba(15,23,42,.85);backdrop-filter:blur(12px);border-bottom:1px solid rgba(255,255,255,.06)}
 .card{background:#1e293b;border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:20px}
 .card-glow{box-shadow:0 0 20px rgba(99,102,241,.05)}
 .metric{background:linear-gradient(135deg,#1e293b 0%,#1a2332 100%)}
@@ -40,6 +45,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
 .btn-success:hover{box-shadow:0 4px 12px rgba(16,185,129,.3)}
 .btn-sm{padding:6px 14px;background:#334155;color:#e2e8f0;border-radius:6px;font-size:12px;border:none;cursor:pointer;transition:all .15s}
 .btn-sm:hover{background:#475569}
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:9999px;font-size:11px;font-weight:500}
 </style>
 </head>
 <body class="min-h-screen text-slate-200">
@@ -54,34 +60,38 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
       </div>
       <div>
         <div class="font-bold text-white text-sm tracking-wide">Doubao 2API</div>
-        <div class="text-xs text-slate-400">OpenAI 兼容代理</div>
+        <div class="text-xs text-slate-400">OpenAI 兼容代理服务</div>
       </div>
     </div>
   </div>
 
   <nav class="flex-1 py-4 px-2 space-y-1">
     <button v-for="(tab,i) in tabs" :key="i" @click="activeTab=i"
-      :class="['sidebar-item w-full text-left px-4 py-3 rounded-lg text-sm flex items-center gap-3 font-medium', activeTab===i ? 'active text-white bg-indigo-600/20' : 'text-slate-400']">
+      :class="['sidebar-item w-full text-left px-4 py-3 rounded-lg text-sm flex items-center gap-3 font-medium', activeTab===i ? 'active' : 'text-slate-400']">
       <span v-html="icons[i]"></span>{{tab.name}}
     </button>
   </nav>
 
-  <div class="p-4 border-t border-slate-800 bg-surface-900/60">
+  <div class="p-4 border-t border-slate-800 bg-surface-900/60 space-y-2">
     <div class="flex items-center justify-between text-xs">
-      <span class="text-slate-400">登录状态</span>
+      <span class="text-slate-400">会话授权状态</span>
       <div class="flex items-center gap-1.5 font-medium" :class="session&&session.logged_in?'text-emerald-400':'text-rose-400'">
         <span :class="['w-2 h-2 rounded-full', session&&session.logged_in?'bg-emerald-400 pulse':'bg-rose-400']"></span>
         {{session&&session.logged_in?'已登录就绪':'未登录'}}
       </div>
+    </div>
+    <div class="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-800/80 font-mono">
+      <span>{{serverInfo.platform || 'System'}}</span>
+      <span>v0.2.0</span>
     </div>
   </div>
 </aside>
 
 <!-- Main Content -->
 <div class="flex-1 overflow-y-auto">
-  <header class="sticky top-0 z-10 glass px-8 py-4 flex items-center justify-between">
+  <header class="sticky top-0 z-10 glass px-8 py-3.5 flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <h1 class="text-lg font-bold text-white">{{tabs[activeTab].name}}</h1>
+      <h1 class="text-base font-bold text-white">{{tabs[activeTab].name}}</h1>
       <span class="text-xs px-2.5 py-0.5 rounded-full border"
         :class="session&&session.logged_in?'bg-emerald-950/60 text-emerald-400 border-emerald-800/50':'bg-rose-950/60 text-rose-400 border-rose-800/50'">
         {{session&&session.logged_in?'API 服务正常':'等待登录'}}
@@ -90,14 +100,19 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
         <span>🔥</span> 即用即焚模式
       </span>
     </div>
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-2.5">
+      <!-- API Key management button -->
+      <button @click="showKeyModal=true" class="btn-sm flex items-center gap-1.5 font-mono" :class="apiKey?'border border-indigo-500/50 text-indigo-300':'border border-slate-700 text-slate-400'">
+        <span>🔑</span>
+        <span>{{apiKey ? 'Key: 已配置' : '设置 API Key'}}</span>
+      </button>
       <button @click="resetCaptcha" class="btn btn-sm btn-outline border-slate-700 text-slate-300 hover:text-white" title="重置验证拦截状态，恢复API畅通">
-        🔄 解除拦截 / 恢复服务
+        🔄 解除拦截
       </button>
       <button @click="openDoubaoWeb" class="btn btn-sm btn-primary">
-        🌐 在浏览器中打开豆包
+        🌐 打开豆包
       </button>
-      <div class="text-xs text-slate-400 font-mono">{{currentTime}}</div>
+      <div class="text-xs text-slate-400 font-mono pl-2">{{currentTime}}</div>
     </div>
   </header>
 
@@ -121,58 +136,83 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
       </div>
 
       <!-- Status Metric Cards -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <!-- Card 1: Auth status -->
         <div class="metric card card-glow">
           <div class="text-xs text-slate-400 mb-1">会话授权状态</div>
           <div class="flex items-center gap-2">
             <span :class="['w-3 h-3 rounded-full',session&&session.logged_in?'bg-emerald-400 pulse':'bg-rose-400']"></span>
-            <span class="text-xl font-bold" :class="session&&session.logged_in?'text-emerald-400':'text-rose-400'">
-              {{session&&session.logged_in?'已授权 (Logged In)':'未登录 (Not Logged In)'}}
+            <span class="text-lg font-bold" :class="session&&session.logged_in?'text-emerald-400':'text-rose-400'">
+              {{session&&session.logged_in?'已授权就绪':'未登录凭证'}}
             </span>
           </div>
           <p class="text-xs text-slate-400 mt-2">
-            {{session&&session.logged_in?'Session 有效，所有客户端均可正常请求。':'请使用下方按钮打开豆包进行登录或导入凭证。'}}
+            {{session&&session.logged_in?'Session 有效，各客户端均可请求。':'请使用下方任一方式完成登录。'}}
           </p>
         </div>
 
+        <!-- Card 2: Browser mode -->
         <div class="metric card">
-          <div class="text-xs text-slate-400 mb-1">运行模式</div>
-          <div class="text-xl font-bold text-white flex items-center gap-2">
-            <span>{{browserMode.headless?'👻 静默后台模式':'🖥️ 可见窗口模式'}}</span>
+          <div class="text-xs text-slate-400 mb-1 flex items-center justify-between">
+            <span>运行模式</span>
+            <button @click="toggleBrowserMode" :disabled="modeSwitching" class="text-indigo-400 hover:text-indigo-300 text-xs font-normal">
+              {{modeSwitching?'切换中...':'[切换]'}}
+            </button>
+          </div>
+          <div class="text-lg font-bold text-white flex items-center gap-2">
+            <span>{{browserMode.headless?'👻 静默后台':'🖥️ 桌面窗口'}}</span>
           </div>
           <p class="text-xs text-slate-400 mt-2">
-            {{browserMode.headless?'无弹窗干扰，低内存占用。':'可直接在前台查看与操作浏览器。'}}
+            {{browserMode.headless?'无弹窗干扰，低内存占用。':'可在前台直接观察操作浏览器。'}}
           </p>
         </div>
 
+        <!-- Card 3: API Endpoint (Dynamic) -->
         <div class="metric card">
-          <div class="text-xs text-slate-400 mb-1">本地服务地址</div>
-          <div class="text-sm font-mono font-bold text-brand-300">http://127.0.0.1:9090</div>
-          <p class="text-xs text-slate-400 mt-2">OpenAI Base: <code class="text-slate-300 font-mono">/v1</code></p>
+          <div class="text-xs text-slate-400 mb-1 flex items-center justify-between">
+            <span>服务接入点 (Base URL)</span>
+            <button @click="copyText(apiBaseUrl, 'API Base URL 已复制!')" class="text-indigo-400 hover:text-indigo-300 text-xs font-normal">复制</button>
+          </div>
+          <div class="text-sm font-mono font-bold text-brand-300 truncate" :title="apiBaseUrl">{{apiBaseUrl}}</div>
+          <p class="text-xs text-slate-400 mt-2">OpenAI 兼容端点: <code class="text-slate-300 font-mono">/v1</code></p>
+        </div>
+
+        <!-- Card 4: Auth Key Protection -->
+        <div class="metric card">
+          <div class="text-xs text-slate-400 mb-1 flex items-center justify-between">
+            <span>API 密钥鉴权</span>
+            <button @click="showKeyModal=true" class="text-indigo-400 hover:text-indigo-300 text-xs font-normal">修改</button>
+          </div>
+          <div class="text-base font-bold truncate" :class="apiKey?'text-emerald-400 font-mono':'text-slate-400'">
+            {{apiKey ? (apiKey.slice(0,6)+'***'+apiKey.slice(-3)) : '未启用鉴权'}}
+          </div>
+          <p class="text-xs text-slate-400 mt-2">
+            {{apiKey ? '请求必须附带 Authorization 头' : '任何客户端均可直接访问接入'}}
+          </p>
         </div>
       </div>
 
       <!-- Quick Login Actions Card -->
-      <div class="card card-glow border border-indigo-500/30">
-        <div class="flex items-center justify-between mb-4">
+      <div class="card card-glow border border-indigo-500/30 space-y-4">
+        <div class="flex items-center justify-between">
           <div>
             <h2 class="text-base font-bold text-white flex items-center gap-2">
-              <span>🚀 快速登录与窗口唤起</span>
+              <span>🚀 快速登录方式 (支持多电脑/远程/本地)</span>
             </h2>
-            <p class="text-xs text-slate-400 mt-1">若 Chrome 窗口未自动弹出，可直接点击下方按钮跳转到常用浏览器登录，或强制唤起独立窗口：</p>
+            <p class="text-xs text-slate-400 mt-1">支持纯净扫码登录、Cookie 一键导入、弹出 Chrome 窗口或后台截图查看：</p>
           </div>
           <button @click="fetchOverview" class="btn-sm">🔄 刷新状态</button>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
-          <!-- Button 1: Open Doubao in User's Default Browser -->
-          <button @click="openDoubaoWeb" class="btn btn-primary py-3.5 text-sm">
-            <span>🌐</span>
-            <span>在常用浏览器中打开豆包</span>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+          <!-- Button 1: App QR Login -->
+          <button @click="toggleQrModal" class="btn py-3.5 text-sm" style="background:linear-gradient(135deg,#8b5cf6,#6366f1)">
+            <span>📱</span>
+            <span>豆包 App 扫码登录</span>
           </button>
 
-          <!-- Button 2: Force Launch / Bring Window to Front -->
-          <button @click="forceWindow" :disabled="windowActionLoading" class="btn py-3.5 text-sm" style="background:linear-gradient(135deg,#6366f1,#4f46e5)">
+          <!-- Button 2: Force Launch Chrome Window -->
+          <button @click="forceWindow" :disabled="windowActionLoading" class="btn py-3.5 text-sm" style="background:linear-gradient(135deg,#3b82f6,#2563eb)">
             <span>🖥️</span>
             <span>{{windowActionLoading?'正在唤起...':'弹出 / 置顶 Chrome 窗口'}}</span>
           </button>
@@ -182,12 +222,53 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
             <span>📷</span>
             <span>{{showScreenshot?'收起浏览器截图':'查看后台实时画面'}}</span>
           </button>
+
+          <!-- Button 4: Open in Default Browser -->
+          <button @click="openDoubaoWeb" class="btn btn-sm py-3.5 text-sm border border-slate-600 bg-surface-900/60">
+            <span>🌐</span>
+            <span>在系统浏览器中打开</span>
+          </button>
+        </div>
+
+        <!-- Inline QR Login Viewer (Pure HTTP QR) -->
+        <div v-if="showQrModal" class="p-5 rounded-xl bg-slate-900/90 border border-indigo-500/40 space-y-4">
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-white font-bold flex items-center gap-2">
+              <span>📱 纯净免窗口扫码登录</span>
+              <span class="badge bg-indigo-900/60 text-indigo-300 border border-indigo-700/50">无需图形界面</span>
+            </span>
+            <div class="flex items-center gap-2">
+              <button @click="startQrLogin" :disabled="qrState.loading" class="btn-sm text-xs">🔄 重新获取二维码</button>
+              <button @click="showQrModal=false" class="text-slate-400 hover:text-white text-sm px-2">✕</button>
+            </div>
+          </div>
+
+          <div class="flex flex-col sm:flex-row items-center gap-6 py-2">
+            <div class="relative w-48 h-48 bg-white p-2 rounded-xl flex items-center justify-center shadow-lg border border-slate-300">
+              <img v-if="qrState.img" :src="'data:image/png;base64,'+qrState.img" class="w-full h-full object-contain" alt="QR Code" />
+              <div v-else-if="qrState.loading" class="text-slate-500 text-xs text-center">
+                <div class="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                正在生成二维码...
+              </div>
+              <div v-else class="text-rose-500 text-xs text-center p-2">{{qrState.error || '获取失败'}}</div>
+            </div>
+
+            <div class="flex-1 space-y-2 text-xs">
+              <div class="font-bold text-sm" :class="qrStatusColor">{{qrState.statusText}}</div>
+              <p class="text-slate-400">1. 打开手机端【豆包 App】或微信/抖音扫一扫；</p>
+              <p class="text-slate-400">2. 扫描左侧二维码并在手机上点击确认授权；</p>
+              <p class="text-slate-400">3. 确认后系统将自动提取会话并同步至 Playwright，无需任何手动配置！</p>
+              <div v-if="qrState.status==='success'" class="p-2.5 rounded-lg bg-emerald-950/60 border border-emerald-800 text-emerald-300 font-semibold">
+                🎉 登录成功！会话已自动就绪，您现在可以随时调用 API 了！
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Inline Screenshot Viewer -->
-        <div v-if="showScreenshot" class="mt-5 p-4 rounded-xl bg-slate-900/90 border border-slate-700">
+        <div v-if="showScreenshot" class="p-4 rounded-xl bg-slate-900/90 border border-slate-700">
           <div class="flex items-center justify-between mb-3">
-            <span class="text-xs text-slate-300 font-medium">后台浏览器实时画面（如有二维码可直接用手机扫码）：</span>
+            <span class="text-xs text-slate-300 font-medium">后台浏览器实时画面（若弹出了图形验证码或登录框可在此查看）：</span>
             <button @click="refreshScreenshot" :disabled="screenshot.loading" class="btn-sm text-xs">
               {{screenshot.loading?'截图中...':'🔄 刷新画面'}}
             </button>
@@ -196,7 +277,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
             <img :src="screenshot.img" class="max-h-96 rounded-lg border border-slate-700 shadow-xl" />
             <span class="text-xs text-slate-500 mt-2 font-mono">截取时间: {{screenshot.time}}</span>
           </div>
-          <div v-else class="py-8 text-center text-xs text-slate-500">正在加载截图...</div>
+          <div v-else class="py-8 text-center text-xs text-slate-500">正在加载画面...</div>
         </div>
       </div>
 
@@ -207,14 +288,14 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
             <h3 class="text-sm font-bold text-white flex items-center gap-2">
               <span>📥 一键导入已登录 Cookie（最稳妥、免扫码）</span>
             </h3>
-            <p class="text-xs text-slate-400 mt-1">如果您已经在日常的 Edge 或 Chrome 中登录了豆包，只需 5 秒即可导入：</p>
+            <p class="text-xs text-slate-400 mt-1">如果您已经在其他电脑或日常的 Edge/Chrome 中登录了豆包，只需 5 秒即可导入：</p>
           </div>
         </div>
 
         <div class="p-3 mb-3 rounded-lg bg-surface-800/80 border border-slate-700 text-xs text-slate-300 space-y-1">
-          <div>1. 在已登录的豆包网页（doubao.com/chat）按 <kbd class="px-1.5 py-0.5 rounded bg-slate-700 font-mono text-slate-200">F12</kbd> 打开控制台；</div>
+          <div>1. 在任意电脑已登录的豆包网页（doubao.com/chat）按 <kbd class="px-1.5 py-0.5 rounded bg-slate-700 font-mono text-slate-200">F12</kbd> 打开控制台；</div>
           <div>2. 切换到 <span class="text-indigo-300 font-semibold">Console (控制台)</span>，输入 <code class="text-emerald-400 font-mono font-bold select-all">copy(document.cookie)</code> 并按回车；</div>
-          <div>3. 粘贴到下方文本框，点击【确认导入并激活】即可永久保存！</div>
+          <div>3. 粘贴到下方文本框，点击【确认导入并激活】即可立即激活会话！</div>
         </div>
 
         <div class="flex gap-2">
@@ -233,13 +314,19 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
         <h3 class="text-sm font-bold text-slate-200 mb-2">🔌 客户端接入配置 (OpenAI 兼容)</h3>
         <p class="text-xs text-slate-400 mb-3">可在 Cherry Studio、Chatbox、NextChat、Cursor、沉浸式翻译等任意软件中使用：</p>
         <div class="grid md:grid-cols-2 gap-3 text-xs">
-          <div class="p-3 bg-surface-800 rounded-lg border border-slate-700">
-            <span class="text-slate-400 block mb-1">API Base URL:</span>
-            <code class="font-mono text-indigo-300 font-bold select-all text-sm">http://127.0.0.1:9090/v1</code>
+          <div class="p-3 bg-surface-800 rounded-lg border border-slate-700 flex items-center justify-between">
+            <div>
+              <span class="text-slate-400 block mb-1">API Base URL:</span>
+              <code class="font-mono text-indigo-300 font-bold select-all text-sm">{{apiBaseUrl}}</code>
+            </div>
+            <button @click="copyText(apiBaseUrl, '已复制 Base URL!')" class="btn-sm text-xs">复制</button>
           </div>
-          <div class="p-3 bg-surface-800 rounded-lg border border-slate-700">
-            <span class="text-slate-400 block mb-1">API Key:</span>
-            <code class="font-mono text-emerald-400 font-bold select-all text-sm">sk-doubao (或任意字符)</code>
+          <div class="p-3 bg-surface-800 rounded-lg border border-slate-700 flex items-center justify-between">
+            <div>
+              <span class="text-slate-400 block mb-1">API Key:</span>
+              <code class="font-mono text-emerald-400 font-bold select-all text-sm">{{apiKey || 'sk-doubao (或任意字符)'}}</code>
+            </div>
+            <button @click="copyText(apiKey || 'sk-doubao', '已复制 API Key!')" class="btn-sm text-xs">复制</button>
           </div>
         </div>
       </div>
@@ -258,6 +345,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
               <option value="doubao-2.1-pro">doubao-2.1-pro (2.1 专业版)</option>
               <option value="doubao-2.1">doubao-2.1 (2.1 标准版)</option>
               <option value="doubao-expert">doubao-expert (专家深度推理)</option>
+              <option value="doubao-2.1-think">doubao-2.1-think (2.1 思考版)</option>
             </select>
           </div>
           <div>
@@ -280,6 +368,14 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
               {{test.loading?'正在处理响应...':'🚀 发送测试'}}
             </button>
           </div>
+        </div>
+
+        <!-- Quick prompt tags -->
+        <div class="flex items-center gap-2 mb-3 text-xs">
+          <span class="text-slate-400">快速示例:</span>
+          <button @click="test.prompt='9.11和9.8哪个大？请简要推理说明。'" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300">9.11与9.8比大小</button>
+          <button @click="test.prompt='写一段优雅易懂的 Python 快速排序代码并给出注释。'" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300">快速排序代码</button>
+          <button @click="test.prompt='用一句话幽默地向大家介绍你自己。'" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300">幽默自我介绍</button>
         </div>
 
         <div class="mb-4">
@@ -313,8 +409,62 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
       </div>
     </section>
 
-    <!-- TAB 2: 请求日志 -->
-    <section v-show="activeTab===2">
+    <!-- TAB 2: 系统信息与配置 -->
+    <section v-show="activeTab===2" class="space-y-6">
+      <div class="card space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div>
+            <h3 class="text-base font-bold text-white">⚙️ 服务器运行环境与参数</h3>
+            <p class="text-xs text-slate-400 mt-0.5">跨机器部署与配置状态实时监控</p>
+          </div>
+          <button @click="fetchSystem" class="btn-sm">🔄 刷新</button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          <div class="p-3.5 bg-surface-900/60 rounded-xl border border-slate-800">
+            <div class="text-slate-400 mb-1">操作系统 / 平台</div>
+            <div class="text-sm font-semibold font-mono text-white">{{serverInfo.platform || '检测中...'}}</div>
+          </div>
+          <div class="p-3.5 bg-surface-900/60 rounded-xl border border-slate-800">
+            <div class="text-slate-400 mb-1">Python 运行版本</div>
+            <div class="text-sm font-semibold font-mono text-white truncate" :title="serverInfo.python_version">{{serverInfo.python_version ? serverInfo.python_version.split(' ')[0] : '检测中...'}}</div>
+          </div>
+          <div class="p-3.5 bg-surface-900/60 rounded-xl border border-slate-800">
+            <div class="text-slate-400 mb-1">服务连续运行时长</div>
+            <div class="text-sm font-semibold font-mono text-indigo-300">{{fmtDur(serverInfo.uptime_seconds)}}</div>
+          </div>
+          <div class="p-3.5 bg-surface-900/60 rounded-xl border border-slate-800">
+            <div class="text-slate-400 mb-1">监听地址与端口</div>
+            <div class="text-sm font-semibold font-mono text-white">{{serverInfo.host}}:{{serverInfo.port}}</div>
+          </div>
+          <div class="p-3.5 bg-surface-900/60 rounded-xl border border-slate-800">
+            <div class="text-slate-400 mb-1">每分钟请求限制 (RPM)</div>
+            <div class="text-sm font-semibold font-mono text-emerald-400">{{serverInfo.rpm_limit || 20}} 次/分</div>
+          </div>
+          <div class="p-3.5 bg-surface-900/60 rounded-xl border border-slate-800">
+            <div class="text-slate-400 mb-1">即用即焚模式 (自动删除临时对话)</div>
+            <div class="text-sm font-semibold font-mono" :class="serverInfo.auto_delete_conv?'text-emerald-400':'text-amber-400'">
+              {{serverInfo.auto_delete_conv ? '已开启 (推荐)' : '已关闭'}}
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2">
+          <h4 class="text-xs font-bold text-slate-300 mb-2">已注册支持的模型清单：</h4>
+          <div class="flex flex-wrap gap-2">
+            <span v-for="m in (serverInfo.models?.chat || [])" :key="m" class="px-2.5 py-1 rounded-md bg-indigo-950/50 border border-indigo-800/60 text-indigo-300 font-mono text-xs">
+              {{m}}
+            </span>
+            <span v-for="m in (serverInfo.models?.image || [])" :key="m" class="px-2.5 py-1 rounded-md bg-emerald-950/50 border border-emerald-800/60 text-emerald-300 font-mono text-xs">
+              {{m}}
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: 请求日志 -->
+    <section v-show="activeTab===3">
       <div class="card">
         <div class="flex items-center justify-between mb-4">
           <span class="text-xs text-slate-400">最近 100 条请求调用记录 (每 5 秒自动刷新)</span>
@@ -352,256 +502,488 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
 
   </div>
 </div>
+
+<!-- API Key Configuration Modal -->
+<div v-if="showKeyModal" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+  <div class="bg-surface-900 border border-slate-700 rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4">
+    <div class="flex items-center justify-between">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <span>🔑 配置 API 访问密钥</span>
+      </h3>
+      <button @click="showKeyModal=false" class="text-slate-400 hover:text-white">✕</button>
+    </div>
+    <p class="text-xs text-slate-400 leading-relaxed">
+      当服务器环境变量设置了 <code class="text-indigo-300 font-mono">DOUBAO_API_KEY</code> 时，网页控制台与所有 API 请求均需携带该密钥。
+    </p>
+    <div class="space-y-1.5">
+      <label class="text-xs text-slate-400 font-medium">当前 API Key</label>
+      <input v-model="keyInput" type="text" class="w-full text-xs font-mono" placeholder="留空则表示不鉴权..." />
+    </div>
+    <div class="flex justify-end gap-2 pt-2">
+      <button @click="showKeyModal=false" class="btn-sm">取消</button>
+      <button @click="saveApiKey" class="btn btn-primary btn-sm">保存密钥</button>
+    </div>
+  </div>
+</div>
+
 </div>
 
 <script>
-const{createApp,ref,reactive,onMounted}=Vue;
+const { createApp, ref, reactive, computed, onMounted } = Vue;
+
 createApp({
   setup(){
-    const API=window.location.origin;
-    const tabs=ref([{name:'状态与登录'},{name:'API 调试测试'},{name:'请求日志'}]);
-    const icons=[
+    const API = window.location.origin;
+    const apiBaseUrl = computed(() => API + '/v1');
+
+    // API Key management
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialKey = urlParams.get('key') || localStorage.getItem('doubao_api_key') || '';
+    if(urlParams.get('key')) {
+      localStorage.setItem('doubao_api_key', urlParams.get('key'));
+    }
+    const apiKey = ref(initialKey);
+    const keyInput = ref(initialKey);
+    const showKeyModal = ref(false);
+
+    function saveApiKey(){
+      apiKey.value = keyInput.value.trim();
+      if(apiKey.value){
+        localStorage.setItem('doubao_api_key', apiKey.value);
+      }else{
+        localStorage.removeItem('doubao_api_key');
+      }
+      showKeyModal.value = false;
+      fetchOverview();
+      fetchLogs();
+    }
+
+    const tabs = ref([
+      { name: '状态与登录' },
+      { name: 'API 调试测试' },
+      { name: '系统信息与配置' },
+      { name: '请求日志' }
+    ]);
+
+    const icons = [
       '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>',
       '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+      '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3" stroke-width="2"/></svg>',
       '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>'
     ];
-    const activeTab=ref(0);
-    const session=ref(null);
-    const browserMode=reactive({headless:false,mode:'window',loading:false});
-    const currentTime=ref('');
-    const cookieInput=ref('');
-    const cookieLoading=ref(false);
-    const cookieMessage=ref('');
-    const showScreenshot=ref(false);
-    const screenshot=reactive({img:'',loading:false,time:''});
-    const windowActionLoading=ref(false);
-    const logs=ref([]);
 
-    const test=reactive({
-      model:'doubao-2.1-turbo',
-      reasoningEffort:'auto',
-      stream:true,
-      prompt:'9.11和9.8哪个大？请简要推理说明。',
-      output:'',
-      thinking:'',
-      thinkOpen:true,
-      error:'',
-      loading:false,
-      ms:0
+    const activeTab = ref(0);
+    const session = ref(null);
+    const browserMode = reactive({ headless: false, mode: 'window' });
+    const modeSwitching = ref(false);
+    const currentTime = ref('');
+    const serverInfo = ref({});
+
+    // Cookie import
+    const cookieInput = ref('');
+    const cookieLoading = ref(false);
+    const cookieMessage = ref('');
+
+    // Screenshot
+    const showScreenshot = ref(false);
+    const screenshot = reactive({ img: '', loading: false, time: '' });
+    const windowActionLoading = ref(false);
+
+    // QR Login
+    const showQrModal = ref(false);
+    const qrState = reactive({
+      img: '',
+      loading: false,
+      status: 'idle',
+      statusText: '等待获取二维码...',
+      error: '',
+      pollTimer: null
     });
 
-    function fmtTime(ts){if(!ts)return'';return new Date(ts*1000).toLocaleTimeString('zh-CN',{hour12:false})}
+    const qrStatusColor = computed(() => {
+      switch(qrState.status){
+        case 'waiting_scan': case 'qr_ready': return 'text-amber-400';
+        case 'scanned': return 'text-indigo-400';
+        case 'success': case 'confirmed': return 'text-emerald-400';
+        case 'expired': case 'failed': return 'text-rose-400';
+        default: return 'text-slate-300';
+      }
+    });
 
-    async function api(path,opts={}){
-      const r=await fetch(API+path,{headers:{'Content-Type':'application/json'},...opts});
+    const logs = ref([]);
+
+    // Testing playground
+    const test = reactive({
+      model: 'doubao-2.1-turbo',
+      reasoningEffort: 'auto',
+      stream: true,
+      prompt: '9.11和9.8哪个大？请简要推理说明。',
+      output: '',
+      thinking: '',
+      thinkOpen: true,
+      error: '',
+      loading: false,
+      ms: 0
+    });
+
+    function fmtTime(ts){
+      if(!ts) return '';
+      return new Date(ts*1000).toLocaleTimeString('zh-CN', {hour12: false});
+    }
+
+    function fmtDur(s){
+      if(!s && s !== 0) return '0s';
+      s = Math.round(s);
+      if(s < 60) return s + '秒';
+      if(s < 3600) return Math.floor(s/60) + '分 ' + (s%60) + '秒';
+      return Math.floor(s/3600) + '小时 ' + Math.floor((s%3600)/60) + '分';
+    }
+
+    function copyText(txt, okMsg='已复制到剪贴板!'){
+      navigator.clipboard.writeText(txt).then(()=>{
+        alert(okMsg);
+      }).catch(()=>{
+        prompt('请按 Ctrl+C 复制内容:', txt);
+      });
+    }
+
+    async function api(path, opts={}){
+      const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+      if(apiKey.value){
+        headers['Authorization'] = 'Bearer ' + apiKey.value;
+      }
+      const r = await fetch(API + path, { ...opts, headers });
+      if(r.status === 401){
+        showKeyModal.value = true;
+        throw new Error('未授权 (401)，请输入有效的 API Key');
+      }
       return r.json();
     }
 
     async function fetchSession(){
       try{
-        const d=await api('/admin/api/status');
-        session.value={logged_in:d.logged_in,status:d.logged_in?'healthy':'not_logged_in'};
-        if(d.headless!==undefined){
-          browserMode.headless=d.headless;
-          browserMode.mode=d.mode||(d.headless?'headless':'window');
+        const d = await api('/admin/api/status');
+        session.value = {
+          logged_in: d.logged_in,
+          status: d.logged_in ? 'healthy' : 'not_logged_in',
+          needs_captcha: d.needs_captcha
+        };
+        if(d.headless !== undefined){
+          browserMode.headless = d.headless;
+          browserMode.mode = d.mode || (d.headless ? 'headless' : 'window');
         }
       }catch(e){
-        session.value={logged_in:false};
+        if(!session.value) session.value = { logged_in: false };
       }
     }
 
+    async function fetchSystem(){
+      try{
+        serverInfo.value = await api('/admin/api/system');
+      }catch(e){}
+    }
+
     async function fetchOverview(){
-      await fetchSession();
+      await Promise.all([fetchSession(), fetchSystem()]);
     }
 
     async function openDoubaoWeb(){
       window.open('https://www.doubao.com/chat/', '_blank');
       try{
-        await api('/admin/api/open-doubao',{method:'POST'});
+        await api('/admin/api/open-doubao', { method: 'POST' });
       }catch(e){}
     }
 
-    async function forceWindow(){
-      windowActionLoading.value=true;
+    async function toggleBrowserMode(){
+      modeSwitching.value = true;
       try{
-        const r=await api('/admin/api/browser/force-window',{method:'POST'});
-        if(r.status==='ok'){
-          browserMode.headless=false;
-          browserMode.mode='window';
-          alert('已请求唤起 Chrome 窗口！若任务栏闪烁请点击激活。');
-        }else{
-          alert('唤起窗口提示: '+(r.detail||'后台正在运行'));
-        }
+        const targetHeadless = !browserMode.headless;
+        const r = await api('/admin/api/browser/mode', {
+          method: 'POST',
+          body: JSON.stringify({ headless: targetHeadless })
+        });
+        browserMode.headless = r.headless;
+        browserMode.mode = r.mode;
         await fetchSession();
       }catch(e){
-        alert('操作失败: '+e.message);
+        alert('切换模式失败: ' + e.message);
       }finally{
-        windowActionLoading.value=false;
+        modeSwitching.value = false;
       }
     }
 
+    async function forceWindow(){
+      windowActionLoading.value = true;
+      try{
+        const r = await api('/admin/api/browser/force-window', { method: 'POST' });
+        if(r.status === 'ok'){
+          browserMode.headless = false;
+          browserMode.mode = 'window';
+          alert('已请求唤起 Chrome 窗口！若任务栏闪烁请点击激活。');
+        }else{
+          alert('唤起窗口提示: ' + (r.detail || '后台正在运行'));
+        }
+        await fetchSession();
+      }catch(e){
+        alert('操作失败: ' + e.message);
+      }finally{
+        windowActionLoading.value = false;
+      }
+    }
+
+    // QR Login Flow
+    async function toggleQrModal(){
+      showQrModal.value = !showQrModal.value;
+      if(showQrModal.value){
+        await startQrLogin();
+      }else if(qrState.pollTimer){
+        clearInterval(qrState.pollTimer);
+        qrState.pollTimer = null;
+      }
+    }
+
+    async function startQrLogin(){
+      if(qrState.pollTimer){
+        clearInterval(qrState.pollTimer);
+        qrState.pollTimer = null;
+      }
+      qrState.loading = true;
+      qrState.img = '';
+      qrState.error = '';
+      qrState.status = 'starting';
+      qrState.statusText = '正在生成二维码...';
+
+      try{
+        const r = await api('/v1/session/qr-login', { method: 'POST' });
+        if(r.qr_image_base64){
+          qrState.img = r.qr_image_base64;
+          qrState.status = 'waiting_scan';
+          qrState.statusText = '二维码已就绪，请使用豆包 App 扫码';
+          pollQrLogin();
+        }else{
+          qrState.error = r.detail || r.error || '生成二维码失败';
+          qrState.status = 'failed';
+          qrState.statusText = '生成失败: ' + qrState.error;
+        }
+      }catch(e){
+        qrState.error = e.message;
+        qrState.status = 'failed';
+        qrState.statusText = '请求失败: ' + e.message;
+      }finally{
+        qrState.loading = false;
+      }
+    }
+
+    function pollQrLogin(){
+      if(qrState.pollTimer) clearInterval(qrState.pollTimer);
+      qrState.pollTimer = setInterval(async () => {
+        try{
+          const r = await api('/v1/session/qr-login');
+          qrState.status = r.status || qrState.status;
+          if(r.status === 'confirmed' || r.status === 'success'){
+            clearInterval(qrState.pollTimer);
+            qrState.pollTimer = null;
+            qrState.status = 'success';
+            qrState.statusText = '🎉 登录成功！正在同步更新会话...';
+            setTimeout(async () => {
+              await fetchSession();
+              setTimeout(() => { showQrModal.value = false; }, 2000);
+            }, 1000);
+          }else if(r.status === 'scanned'){
+            qrState.statusText = '已扫码，请在手机上点击确认登录...';
+          }else if(r.status === 'expired'){
+            qrState.statusText = '二维码已过期，请点击右上角重新获取';
+            clearInterval(qrState.pollTimer);
+            qrState.pollTimer = null;
+          }else if(r.status === 'failed'){
+            qrState.statusText = '登录失败: ' + (r.error || '未知原因');
+            clearInterval(qrState.pollTimer);
+            qrState.pollTimer = null;
+          }
+        }catch(e){
+          clearInterval(qrState.pollTimer);
+          qrState.pollTimer = null;
+        }
+      }, 2000);
+    }
+
     async function toggleScreenshot(){
-      showScreenshot.value=!showScreenshot.value;
+      showScreenshot.value = !showScreenshot.value;
       if(showScreenshot.value){
         await refreshScreenshot();
       }
     }
 
     async function refreshScreenshot(){
-      screenshot.loading=true;
+      screenshot.loading = true;
       try{
-        const r=await fetch(API+'/auth/screenshot');
-        if(!r.ok)throw new Error('HTTP '+r.status);
-        const blob=await r.blob();
-        screenshot.img=URL.createObjectURL(blob);
-        screenshot.time=new Date().toLocaleTimeString('zh-CN',{hour12:false});
+        const headers = {};
+        if(apiKey.value) headers['Authorization'] = 'Bearer ' + apiKey.value;
+        const r = await fetch(API + '/auth/screenshot', { headers });
+        if(!r.ok) throw new Error('HTTP ' + r.status);
+        const blob = await r.blob();
+        screenshot.img = URL.createObjectURL(blob);
+        screenshot.time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
       }catch(e){
-        screenshot.img='';
-        alert('获取画面失败: '+e.message);
+        screenshot.img = '';
+        alert('获取画面失败: ' + e.message);
       }finally{
-        screenshot.loading=false;
+        screenshot.loading = false;
       }
     }
 
     async function submitCookie(){
-      if(!cookieInput.value.trim())return;
-      cookieLoading.value=true;
-      cookieMessage.value='';
+      if(!cookieInput.value.trim()) return;
+      cookieLoading.value = true;
+      cookieMessage.value = '';
       try{
-        const r=await api('/admin/api/cookies/import',{
-          method:'POST',
-          body:JSON.stringify({cookies:cookieInput.value.trim()})
+        const r = await api('/admin/api/cookies/import', {
+          method: 'POST',
+          body: JSON.stringify({ cookies: cookieInput.value.trim() })
         });
-        if(r.status==='ok'&&r.logged_in){
-          cookieMessage.value='🎉 导入成功！会话已成功激活，已就绪！';
-          cookieInput.value='';
+        if((r.status === 'ok' || r.success) && (r.logged_in || r.ready)){
+          cookieMessage.value = '🎉 导入成功！会话已成功激活并就绪！';
+          cookieInput.value = '';
           await fetchSession();
         }else{
-          cookieMessage.value='⚠️ 导入已接收，但检测到会话尚未生效，请确认复制了包含 sessionid 的完整 Cookie。';
+          cookieMessage.value = '⚠️ 导入已接收，但检测到会话未生效，请确认复制了包含 sessionid 的完整 Cookie。';
           await fetchSession();
         }
       }catch(e){
-        cookieMessage.value='导入出错: '+e.message;
+        cookieMessage.value = '导入出错: ' + e.message;
       }finally{
-        cookieLoading.value=false;
+        cookieLoading.value = false;
       }
     }
 
     async function fetchLogs(){
       try{
-        logs.value=(await api('/admin/api/logs')).reverse();
+        const l = await api('/admin/api/logs');
+        logs.value = Array.isArray(l) ? [...l].reverse() : [];
       }catch(e){}
     }
 
     async function runTest(){
-      test.output='';
-      test.thinking='';
-      test.error='';
-      test.loading=true;
-      test.ms=0;
-      const t0=Date.now();
+      test.output = '';
+      test.thinking = '';
+      test.error = '';
+      test.loading = true;
+      test.ms = 0;
+      const t0 = Date.now();
 
       if(!test.prompt.trim()){
-        test.error='请输入测试内容';
-        test.loading=false;
+        test.error = '请输入测试内容';
+        test.loading = false;
         return;
       }
 
-      const controller=new AbortController();
-      const timeoutId=setTimeout(()=>controller.abort(),60000);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
 
       try{
-        const reqBody={
-          model:test.model,
-          messages:[{role:'user',content:test.prompt}],
-          stream:test.stream
+        const reqBody = {
+          model: test.model,
+          messages: [{ role: 'user', content: test.prompt }],
+          stream: test.stream
         };
-        if(test.reasoningEffort!=='auto'){
-          reqBody.reasoning_effort=test.reasoningEffort;
-          reqBody.enable_thinking=(test.reasoningEffort!=='none');
+        if(test.reasoningEffort !== 'auto'){
+          reqBody.reasoning_effort = test.reasoningEffort;
+          reqBody.enable_thinking = (test.reasoningEffort !== 'none');
         }
 
-        const resp=await fetch(API+'/v1/chat/completions',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify(reqBody),
-          signal:controller.signal
+        const headers = { 'Content-Type': 'application/json' };
+        if(apiKey.value) headers['Authorization'] = 'Bearer ' + apiKey.value;
+
+        const resp = await fetch(API + '/v1/chat/completions', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(reqBody),
+          signal: controller.signal
         });
 
         if(!resp.ok){
-          const err=await resp.json().catch(()=>({}));
-          throw new Error(err.error?.message||err.detail||('HTTP '+resp.status));
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.error?.message || err.detail || ('HTTP ' + resp.status));
         }
 
         if(test.stream){
-          const reader=resp.body.getReader();
-          const dec=new TextDecoder();
-          let buf='';
+          const reader = resp.body.getReader();
+          const dec = new TextDecoder();
+          let buf = '';
           while(true){
-            const{done,value}=await reader.read();
-            if(done)break;
-            buf+=dec.decode(value,{stream:true});
-            const lines=buf.split('\n');
-            buf=lines.pop()||'';
+            const { done, value } = await reader.read();
+            if(done) break;
+            buf += dec.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop() || '';
             for(const line of lines){
-              if(!line.startsWith('data: '))continue;
-              const d=line.slice(6);
-              if(d==='[DONE]')continue;
+              if(!line.startsWith('data: ')) continue;
+              const d = line.slice(6);
+              if(d === '[DONE]') continue;
               try{
-                const j=JSON.parse(d);
-                if(j.error)throw new Error(j.error.message||'Stream error');
-                const delta=j.choices?.[0]?.delta||{};
-                if(delta.reasoning_content)test.thinking+=delta.reasoning_content;
-                if(delta.content)test.output+=delta.content;
+                const j = JSON.parse(d);
+                if(j.error) throw new Error(j.error.message || 'Stream error');
+                const delta = j.choices?.[0]?.delta || {};
+                if(delta.reasoning_content) test.thinking += delta.reasoning_content;
+                if(delta.content) test.output += delta.content;
               }catch(e){
-                if(e.message==='Stream error')throw e;
+                if(e.message === 'Stream error') throw e;
               }
             }
           }
         }else{
-          const r=await resp.json();
-          const msg=r.choices?.[0]?.message||{};
-          test.output=msg.content||JSON.stringify(r,null,2);
-          if(msg.reasoning_content)test.thinking=msg.reasoning_content;
+          const r = await resp.json();
+          const msg = r.choices?.[0]?.message || {};
+          test.output = msg.content || JSON.stringify(r, null, 2);
+          if(msg.reasoning_content) test.thinking = msg.reasoning_content;
         }
-        test.ms=Date.now()-t0;
+        test.ms = Date.now() - t0;
       }catch(e){
-        if(e.name==='AbortError'){
-          test.error='请求超时（超过60秒），可能尚未完成登录，请先在常用浏览器中登录。';
+        if(e.name === 'AbortError'){
+          test.error = '请求超时（超过90秒），可能尚未完成登录，请先通过扫码或导入Cookie登录。';
         }else{
-          test.error=e.message||'调用出错';
+          test.error = e.message || '调用出错';
         }
       }finally{
         clearTimeout(timeoutId);
-        test.loading=false;
+        test.loading = false;
+        fetchLogs();
+      }
+    }
+
+    async function resetCaptcha(){
+      try{
+        const r = await api('/auth/reset_captcha', { method: 'POST' });
+        alert(r.message || '安全拦截标志已解除，服务已恢复正常！');
+        await fetchSession();
+      }catch(e){
+        alert('解除失败: ' + e.message);
       }
     }
 
     onMounted(()=>{
       fetchOverview();
       fetchLogs();
-      currentTime.value=new Date().toLocaleTimeString('zh-CN',{hour12:false});
-      setInterval(()=>{currentTime.value=new Date().toLocaleTimeString('zh-CN',{hour12:false})},1000);
-      setInterval(()=>{if(activeTab.value===0)fetchSession()},5000);
-      setInterval(()=>{if(activeTab.value===2)fetchLogs()},5000);
+      currentTime.value = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      setInterval(() => {
+        currentTime.value = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      }, 1000);
+      setInterval(() => {
+        if(activeTab.value === 0) fetchSession();
+        if(activeTab.value === 3) fetchLogs();
+      }, 5000);
     });
 
-    async function resetCaptcha(){
-      try{
-        const r=await api('/auth/reset_captcha',{method:'POST'});
-        alert(r.message||'安全拦截标志已解除，服务已恢复正常！');
-        await fetchSession();
-      }catch(e){
-        alert('解除失败: '+e.message);
-      }
-    }
-
-    return{
-      tabs,icons,activeTab,session,browserMode,currentTime,
-      cookieInput,cookieLoading,cookieMessage,
-      showScreenshot,screenshot,windowActionLoading,logs,test,
-      fmtTime,fetchOverview,openDoubaoWeb,forceWindow,toggleScreenshot,
-      refreshScreenshot,submitCookie,fetchLogs,runTest,resetCaptcha
+    return {
+      API, apiBaseUrl, apiKey, keyInput, showKeyModal, saveApiKey,
+      tabs, icons, activeTab, session, browserMode, modeSwitching,
+      currentTime, serverInfo, copyText, fmtDur, fmtTime,
+      cookieInput, cookieLoading, cookieMessage,
+      showScreenshot, screenshot, windowActionLoading,
+      showQrModal, qrState, qrStatusColor, toggleQrModal, startQrLogin,
+      logs, test,
+      fetchOverview, fetchSystem, openDoubaoWeb, toggleBrowserMode, forceWindow,
+      toggleScreenshot, refreshScreenshot, submitCookie, fetchLogs, runTest, resetCaptcha
     };
   }
 }).mount('#app');

@@ -15,6 +15,7 @@ and call this signing function. All actual API traffic goes through httpx.
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from typing import AsyncGenerator, Optional, Dict, Any, List
@@ -83,15 +84,46 @@ class BrowserClient:
         self._last_error_code = 0
         self._needs_captcha = False
 
+    def clear_captcha(self):
+        """Manually or automatically clear the needs_captcha flag."""
+        self._needs_captcha = False
+        self._consecutive_failures = 0
+        log.info("Captcha flag cleared")
+
+    async def is_captcha_visible(self) -> bool:
+        """Check whether a real captcha modal/slider is actually visible in the browser DOM."""
+        if not self._page:
+            return False
+        try:
+            selectors = [
+                '#captcha_container',
+                '.captcha_verify_container',
+                '.verify-bar-close',
+                '.secsdk-captcha-drag-icon',
+                '[class*="captcha-modal"]',
+                '[class*="captcha_verify"]',
+                '.semi-modal:has-text("验证")',
+            ]
+            for sel in selectors:
+                loc = self._page.locator(sel)
+                cnt = await loc.count()
+                if cnt > 0:
+                    for i in range(cnt):
+                        if await loc.nth(i).is_visible():
+                            return True
+            return False
+        except Exception:
+            return False
+
     def record_failure(self, error_code: int = 0):
         """Track consecutive failures. Mark captcha-needed on 710022004."""
         self._consecutive_failures += 1
         self._last_error_code = error_code
         if error_code == 710022004:
             self._needs_captcha = True
-            log.warning("Captcha required (710022004) - marking needs_captcha=True")
-        if self._consecutive_failures >= 5:
-            log.error("5 consecutive failures - marking not ready")
+            log.warning("Captcha flag marked on 710022004")
+        if self._consecutive_failures >= 10:
+            log.error("10 consecutive failures - marking not ready")
             self._ready = False
 
     # ------------------------------------------------------------------
@@ -100,6 +132,12 @@ class BrowserClient:
 
     async def start(self):
         """Launch browser, navigate to Doubao, init httpx client."""
+        # On Linux/Docker without a DISPLAY, enforce headless mode
+        if not os.environ.get("DISPLAY") and (os.name != "nt"):
+            if not self.headless:
+                log.info("No DISPLAY available (Linux/Docker): enforcing headless=True")
+                self.headless = True
+
         log.info("Starting BrowserClient (headless=%s)", self.headless)
         self._playwright = await async_playwright().start()
 
@@ -110,27 +148,74 @@ class BrowserClient:
             "--no-sandbox",
         ]
 
-        if self.user_data_dir:
-            self._context = await self._playwright.chromium.launch_persistent_context(
-                self.user_data_dir,
-                headless=self.headless,
-                args=launch_args,
-                viewport={"width": 1280, "height": 720},
-                locale="zh-CN",
-            )
-            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        else:
-            browser = await self._playwright.chromium.launch(
-                headless=self.headless, args=launch_args,
-            )
-            self._context = await browser.new_context(
-                viewport={"width": 1280, "height": 720}, locale="zh-CN",
-            )
-            self._page = await self._context.new_page()
+        # Prefer bundled Chromium to prevent collisions with user's existing Chrome processes
+        chrome_channel = None
+        if os.environ.get("DOUBAO_USE_SYSTEM_CHROME", "false").lower() == "true":
+            chrome_paths = [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            ]
+            if any(os.path.exists(p) for p in chrome_paths):
+                chrome_channel = "chrome"
+
+        launch_kwargs = {
+            "headless": self.headless,
+            "args": launch_args,
+            "viewport": {"width": 1280, "height": 720},
+            "locale": "zh-CN",
+        }
+        if chrome_channel:
+            launch_kwargs["channel"] = chrome_channel
+
+        async def _launch_context(kwargs):
+            if self.user_data_dir:
+                ctx = await self._playwright.chromium.launch_persistent_context(
+                    self.user_data_dir,
+                    **kwargs
+                )
+                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                return ctx, page
+            else:
+                b_kwargs = {"headless": self.headless, "args": launch_args}
+                if kwargs.get("channel"):
+                    b_kwargs["channel"] = kwargs["channel"]
+                browser = await self._playwright.chromium.launch(**b_kwargs)
+                ctx = await browser.new_context(
+                    viewport={"width": 1280, "height": 720}, locale="zh-CN",
+                )
+                page = await ctx.new_page()
+                return ctx, page
+
+        try:
+            self._context, self._page = await _launch_context(launch_kwargs)
+        except Exception as e:
+            err_msg = str(e)
+            if "Executable doesn't exist" in err_msg:
+                fallback_success = False
+                for fallback_channel in ("chrome", "msedge"):
+                    try:
+                        log.info("Bundled Chromium not installed. Attempting fallback to system '%s'...", fallback_channel)
+                        kw = dict(launch_kwargs)
+                        kw["channel"] = fallback_channel
+                        self._context, self._page = await _launch_context(kw)
+                        log.info("Successfully launched browser using '%s' channel!", fallback_channel)
+                        fallback_success = True
+                        break
+                    except Exception as fe:
+                        log.debug("Fallback channel '%s' unavailable: %s", fallback_channel, fe)
+                if not fallback_success:
+                    log.error("No compatible browser found. Please run: playwright install chromium")
+                    raise RuntimeError("Playwright Chromium browser not found. Run 'playwright install chromium' to install.") from e
+            else:
+                raise
 
         # Stealth patches
         stealth = Stealth(navigator_languages_override=("zh-CN", "zh"))
         await stealth.apply_stealth_async(self._page)
+
+        # Pre-register fetch bridge
+        await self._setup_fetch_bridge()
 
         # Navigate
         log.info("Navigating to %s", CHAT_URL)
@@ -141,6 +226,8 @@ class BrowserClient:
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(180, connect=10))
 
         await self._check_login_state()
+        if not self._ready and not self.headless:
+            asyncio.create_task(self._trigger_login_dialog())
 
     async def stop(self):
         """Close browser and httpx client."""
@@ -161,20 +248,23 @@ class BrowserClient:
         self._playwright = None
         self._page = None
         self._ready = False
+        self._bridge_ready = False
         log.info("BrowserClient stopped")
 
     async def is_alive(self) -> bool:
         """Check if browser process is still responsive."""
         if not self._page or not self._context:
             return False
+        if self._page.is_closed():
+            return False
         try:
             result = await asyncio.wait_for(
-                self._page.evaluate("1+1"), timeout=5
+                self._page.evaluate("1+1"), timeout=15
             )
             return result == 2
         except Exception as e:
-            log.warning("Browser health check failed: %s", e)
-            return False
+            log.warning("Browser health check timeout (busy): %s", e)
+            return True
 
     async def restart(self):
         """Stop and restart the browser client."""
@@ -184,22 +274,99 @@ class BrowserClient:
         await self.start()
         log.info("BrowserClient restarted. ready=%s", self._ready)
 
+    async def switch_mode(self, headless: bool) -> bool:
+        """Dynamically switch between headless and windowed GUI mode without losing session."""
+        if not headless and not os.environ.get("DISPLAY") and (os.name != "nt"):
+            log.warning("Cannot switch to windowed GUI mode on Linux/Docker without DISPLAY")
+            return False
+
+        if self.headless == headless and self._ready:
+            log.info("Browser mode is already headless=%s", headless)
+            return True
+        log.info("Switching browser mode: headless=%s -> headless=%s", self.headless, headless)
+        self.headless = headless
+        await self.restart()
+        return self._ready
+
+    @classmethod
+    def is_profile_logged_in(cls, user_data_dir: Optional[str]) -> bool:
+        """Check if user_data_dir exists and has logged-in marks."""
+        if not user_data_dir or not os.path.exists(user_data_dir):
+            return False
+        # Check explicit flag file
+        flag_file = os.path.join(user_data_dir, ".login_success")
+        if os.path.exists(flag_file) and os.path.getsize(flag_file) > 0:
+            return True
+        cookies_db = os.path.join(user_data_dir, "Default", "Network", "Cookies")
+        if os.path.exists(cookies_db) and os.path.getsize(cookies_db) > 10240:
+            return True
+        return False
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------
 
     async def _check_login_state(self):
-        """Check if logged in by looking for login button."""
-        login_btn = self._page.locator('button:has-text("登录")')
-        btn_count = await login_btn.count()
-        log.info("Login check: login_button_count=%d", btn_count)
+        """Check if logged in by inspecting session cookies and page DOM."""
+        if self._page and "from_logout=1" in self._page.url:
+            log.info("Page is on from_logout=1, navigating to clean chat URL...")
+            try:
+                await self._page.goto(CHAT_URL, wait_until="load", timeout=30000)
+                await asyncio.sleep(2)
+            except Exception as e:
+                log.warning("Navigation back to CHAT_URL failed: %s", e)
 
-        if btn_count > 0:
-            log.info("Not logged in - login button visible")
+        try:
+            cookies = await self._context.cookies("https://www.doubao.com")
+        except Exception as e:
+            log.warning("Failed to inspect browser cookies (window may have been closed): %s", e)
             self._ready = False
+            return
+        has_session = any(c["name"] == "sessionid" and c.get("value") for c in cookies)
+
+        # Check DOM indicators for true authenticated state
+        has_login_btn = False
+        try:
+            btn = self._page.locator('button:has-text("登录"), a:has-text("登录")')
+            if await btn.count() > 0 and await btn.first.is_visible():
+                has_login_btn = True
+        except Exception:
+            pass
+
+        has_avatar = False
+        try:
+            avatar = self._page.locator('img[class*="avatar"], div[class*="avatar"]')
+            if await avatar.count() > 0:
+                has_avatar = True
+        except Exception:
+            pass
+
+        # True authenticated state: avatar present, or session cookie without visible login button
+        is_logged_in = has_avatar or (has_session and not has_login_btn)
+        log.info("Login check: has_sessionid=%s, has_avatar=%s, has_login_btn=%s -> is_logged_in=%s",
+                 has_session, has_avatar, has_login_btn, is_logged_in)
+
+        if not is_logged_in:
+            log.info("Not logged in - valid sessionid or avatar not confirmed")
+            self._ready = False
+            if self.user_data_dir:
+                flag_file = os.path.join(self.user_data_dir, ".login_success")
+                if os.path.exists(flag_file):
+                    try:
+                        os.remove(flag_file)
+                    except Exception:
+                        pass
             return
 
         self._ready = True
+        if self.user_data_dir:
+            try:
+                os.makedirs(self.user_data_dir, exist_ok=True)
+                with open(os.path.join(self.user_data_dir, ".login_success"), "w", encoding="utf-8") as f:
+                    f.write(str(int(time.time())))
+            except Exception:
+                pass
+
         await self._extract_params()
         await self._seed_ms_token()
         await self._setup_fetch_bridge()
@@ -287,34 +454,47 @@ class BrowserClient:
         log.warning("Fetch hook NOT detected after 30s - requests may fail")
         return False
 
-    async def wait_for_login(self, timeout: int = 120) -> bool:
-        """Wait for user to scan QR code via noVNC."""
+    async def wait_for_login(self, timeout: int = 180) -> bool:
+        """Wait for user to scan QR code."""
         await self._trigger_login_dialog()
         log.info("Waiting for QR scan login (timeout=%ds)...", timeout)
         try:
-            login_btn = self._page.locator('button:has-text("登录")')
-            await login_btn.wait_for(state="hidden", timeout=timeout * 1000)
+            for _ in range(timeout):
+                await asyncio.sleep(1)
+                avatar = self._page.locator('img[class*="avatar"], div[class*="avatar"], span:has-text("套餐"), div:has-text("套餐")')
+                if await avatar.count() > 0:
+                    log.info("Detected user profile/avatar in DOM!")
+                    break
+                login_btn = self._page.locator('button:has-text("登录")')
+                if await login_btn.count() == 0:
+                    log.info("Login button no longer visible!")
+                    break
+
             await asyncio.sleep(2)
-            if await login_btn.count() == 0:
-                self._ready = True
-                await self._extract_params()
-                await self._seed_ms_token()
-                await self._setup_fetch_bridge()
-                await self._verify_fetch_hook()
-                await self._wait_for_signing()
-                log.info("Login successful!")
-                return True
-            return False
+            self._ready = True
+            await self._extract_params()
+            await self._seed_ms_token()
+            await self._setup_fetch_bridge()
+            await self._verify_fetch_hook()
+            await self._wait_for_signing()
+            log.info("Login successful and client ready!")
+            return True
         except Exception as e:
-            log.error("Login timeout: %s", e)
+            log.error("Login check error: %s", e)
             return False
 
     async def _trigger_login_dialog(self):
-        """Click login button to show QR code."""
-        btn = self._page.locator('button:has-text("登录")')
-        if await btn.count() > 0:
-            await btn.click()
-            await asyncio.sleep(2)
+        """Click login button to show QR code dialog."""
+        for _ in range(10):
+            try:
+                btn = self._page.locator('button:has-text("登录")')
+                if await btn.count() > 0:
+                    await btn.first.click()
+                    log.info("Clicked '登录' button to display QR code dialog")
+                    return
+            except Exception:
+                pass
+            await asyncio.sleep(1)
 
 
     async def inject_cookies_and_reload(self, cookies: Dict[str, str]) -> bool:
@@ -391,14 +571,16 @@ class BrowserClient:
                     f'window.bdms.frontierSign("{query_string}")'
                 )
 
-                x_bogus = ""
                 if isinstance(sig, dict):
-                    x_bogus = sig.get("X-Bogus") or sig.get("a_bogus", "")
-                elif isinstance(sig, str):
-                    x_bogus = sig
-
-                if x_bogus:
-                    return f"{base_url}?{query_string}&X-Bogus={x_bogus}"
+                    if "a_bogus" in sig:
+                        return f"{base_url}?{query_string}&a_bogus={sig['a_bogus']}"
+                    elif "X-Bogus" in sig:
+                        return f"{base_url}?{query_string}&X-Bogus={sig['X-Bogus']}"
+                    elif sig:
+                        k, v = next(iter(sig.items()))
+                        return f"{base_url}?{query_string}&{k}={v}"
+                elif isinstance(sig, str) and sig:
+                    return f"{base_url}?{query_string}&X-Bogus={sig}"
 
                 last_error = f"empty signature: {sig}"
             except Exception as e:
@@ -417,15 +599,19 @@ class BrowserClient:
             "aid": "497858",
             "device_id": self._device_id or "",
             "device_platform": "web",
+            "doubao_device_platform": "web",
+            "web_platform": "browser",
             "fp": self._fp or "",
             "language": "zh",
-            "pc_version": "3.19.4",
+            "pc_version": "3.36.0",
+            "doubao_pc_version": "3.36.0",
             "pkg_type": "release_version",
             "real_aid": "497858",
-            "region": "",
+            "region": "CN",
+            "sys_region": "CN",
             "samantha_web": "1",
-            "sys_region": "",
             "tea_uuid": self._web_id or "",
+            "tz_name": "Asia/Shanghai",
             "use-olympus-account": "1",
             "version_code": "20800",
             "web_id": self._web_id or "",
@@ -489,6 +675,11 @@ class BrowserClient:
                 "bot_id": effective_bot_id,
                 "last_section_id": "",
                 "last_message_index": None,
+                "local_permissions": [
+                    {"permission_name": "ACCESS_COARSE_LOCATION", "status": 3},
+                    {"permission_name": "ACCESS_FINE_LOCATION", "status": 3},
+                    {"permission_name": "ACCESS_BACKGROUND_LOCATION", "status": 3},
+                ],
             },
             "messages": [{
                 "local_message_id": msg_uuid,
@@ -511,19 +702,29 @@ class BrowserClient:
                 "collect_id": "",
                 "is_audio": False,
                 "answer_with_suggest": False,
+                "agent_mode": 2,
                 "tts_switch": False,
                 "need_deep_think": use_deep_think,
                 "click_clear_context": False,
                 "from_suggest": False,
                 "is_regen": False,
                 "is_replace": False,
+                "is_from_click_option": False,
+                "is_from_click_softlink": False,
                 "disable_sse_cache": False,
                 "select_text_action": "",
+                "is_select_text": False,
                 "resend_for_regen": False,
                 "scene_type": 0,
                 "unique_key": str(uuid.uuid4()),
                 "start_seq": 0,
                 "need_create_conversation": need_create,
+                "conversation_init_option": {"need_ack_conversation": True},
+                "conversation_init_ext": {
+                    "model_item_key": "0",
+                    "reasoning_effort": str(use_deep_think) if use_deep_think else "0",
+                    "mode_id": "1",
+                },
                 "regen_query_id": [],
                 "edit_query_id": [],
                 "regen_instruction": "",
@@ -533,26 +734,45 @@ class BrowserClient:
                 "shared_app_id": "",
                 "sse_recv_event_options": {"support_chunk_delta": True},
                 "is_ai_playground": False,
+                "is_old_user": True,
                 "recovery_option": {
                     "is_recovery": False,
                     "req_create_time_sec": now_sec,
                     "append_sse_event_scene": 0,
                 },
                 "message_storage_type": 0,
+                "related_deleted_message_ids": {},
+                "connector_info_list": [],
+                "model_config": {
+                    "model_item_key": "0",
+                    "model_extra_params": {},
+                    "reasoning_effort": use_deep_think,
+                },
+                "aggregate_params": {
+                    "conversation_mode": "1",
+                    "mode_id": "1",
+                    "model_item_key": "0",
+                    "agent_mode": "2",
+                    "reasoning_effort": str(use_deep_think) if use_deep_think else "0",
+                    "provider_id": "",
+                },
+                "conversation_mode": 1,
             },
+            "user_context": [],
             "ext": {
+                "agent_mode": "2",
                 "use_deep_think": str(use_deep_think),
-                "fp": self._fp or "",
-                "collection_id": "",
-                "commerce_credit_config_enable": "0",
                 "sub_conv_firstmet_type": "1" if need_create else "0",
+                "collection_id": "",
+                "is_finish": "1",
+                "conversation_init_option": json.dumps({"need_ack_conversation": True}),
+                "commerce_credit_config_enable": "0",
             },
         }
 
-        # Build URL with query params (fetch hook will add a_bogus/msToken)
+        # Build URL with query params and X-Bogus signature via bdms.frontierSign
         query_params = self._build_query_params()
-        query_string = "&".join(f"{k}={v}" for k, v in sorted(query_params.items()))
-        url = f"/chat/completion?{query_string}"
+        url = await self._sign_url("/chat/completion", query_params)
 
         request_id = f"req_{uuid.uuid4().hex[:16]}"
         queue: asyncio.Queue = asyncio.Queue()
@@ -561,10 +781,21 @@ class BrowserClient:
         log.info("POST %s (conv=%s, deep_think=%s) [browser fetch]",
                  url.split("?")[0], conversation_id or "new", use_deep_think)
 
-        # Launch browser fetch in background
+        # Launch browser fetch in background with completion watcher
         eval_task = asyncio.create_task(
             self._browser_fetch_stream(url, payload, request_id)
         )
+
+        def _on_eval_done(task: asyncio.Task):
+            try:
+                exc = task.exception()
+                if exc:
+                    log.error("eval_task crashed for %s: %s", request_id, exc)
+                    queue.put_nowait(f"__ERROR__:{exc}")
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        eval_task.add_done_callback(_on_eval_done)
 
         # Yield parsed SSE events from queue
         try:
@@ -610,7 +841,17 @@ class BrowserClient:
         """Execute fetch() inside browser page and stream SSE chunks via callback."""
         js_code = """
         async ([url, payloadJson, requestId]) => {
+            const sendChunk = async (chunk) => {
+                if (typeof window.__doubaoStreamChunk === 'function') {
+                    try {
+                        await window.__doubaoStreamChunk(requestId, chunk);
+                    } catch(e) {}
+                }
+            };
             try {
+                if (typeof window.__doubaoStreamChunk !== 'function') {
+                    throw new Error('window.__doubaoStreamChunk bridge not registered on page');
+                }
                 const csrf = document.cookie.match(/passport_csrf_token=([^;]+)/);
                 const csrfToken = csrf ? csrf[1] : '';
                 const headers = {
@@ -628,8 +869,7 @@ class BrowserClient:
                 });
                 if (!res.ok) {
                     const errBody = await res.text();
-                    await window.__doubaoStreamChunk(requestId,
-                        '__HTTP_ERROR__:' + res.status + ':' + errBody.slice(0, 500));
+                    await sendChunk('__HTTP_ERROR__:' + res.status + ':' + errBody.slice(0, 500));
                     return;
                 }
                 const reader = res.body.getReader();
@@ -656,7 +896,7 @@ class BrowserClient:
                         try {
                             const obj = JSON.parse(dataStr);
                             obj._event = currentEvent;
-                            await window.__doubaoStreamChunk(requestId, JSON.stringify(obj));
+                            await sendChunk(JSON.stringify(obj));
                         } catch(e) {}
                     }
                 }
@@ -669,15 +909,16 @@ class BrowserClient:
                             try {
                                 const obj = JSON.parse(dataStr);
                                 obj._event = currentEvent;
-                                await window.__doubaoStreamChunk(requestId, JSON.stringify(obj));
+                                await sendChunk(JSON.stringify(obj));
                             } catch(e) {}
                         }
                     }
                 }
                 // Signal completion
-                await window.__doubaoStreamChunk(requestId, null);
+                await sendChunk(null);
             } catch(e) {
-                await window.__doubaoStreamChunk(requestId, '__ERROR__:' + e.message);
+                await sendChunk('__ERROR__:' + e.message);
+                throw e;
             }
         }
         """
@@ -767,6 +1008,78 @@ class BrowserClient:
         if meta.get("conversation_id"):
             return meta["conversation_id"]
         return None
+
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete a conversation from Doubao via /im/conversation/batch_del_user_conv.
+
+        Keeps the web UI sidebar completely clean (即用即焚 / Ephemeral Conversations).
+        Returns True if deletion succeeded, False otherwise.
+        """
+        if not conversation_id or str(conversation_id).strip() in ("0", ""):
+            return False
+
+        if not self._ready or self._page is None:
+            log.warning("Cannot delete conversation %s: browser not ready", conversation_id)
+            return False
+
+        query_params = self._build_query_params()
+        try:
+            signed_url = await self._sign_url("/im/conversation/batch_del_user_conv", query_params)
+        except Exception as exc:
+            log.warning("Failed to sign delete url for %s: %s", conversation_id, exc)
+            return False
+
+        payload = {
+            "cmd": 4171,
+            "uplink_body": {
+                "batch_delete_user_conversation_uplink_body": {
+                    "conversation_id": [str(conversation_id)],
+                    "delete_all": False,
+                    "conversation_type": 3,
+                }
+            },
+            "sequence_id": str(uuid.uuid4()),
+            "channel": 2,
+            "version": "1",
+        }
+
+        try:
+            res = await self._page.evaluate('''async (args) => {
+                const [url, payload] = args;
+                const csrfMatch = document.cookie.match(/passport_csrf_token=([^;]+)/);
+                const csrf = csrfMatch ? csrfMatch[1] : "";
+                try {
+                    const resp = await fetch(url, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json; encoding=utf-8",
+                            "x-tt-passport-csrf-token": csrf,
+                            "agw-js-conv": "str",
+                        },
+                        body: JSON.stringify(payload),
+                    });
+                    const text = await resp.text();
+                    return { status: resp.status, body: text };
+                } catch(e) {
+                    return { error: e.message };
+                }
+            }''', [signed_url, payload])
+
+            if res.get("error"):
+                log.warning("delete_conversation %s failed: %s", conversation_id, res["error"])
+                return False
+
+            data = json.loads(res.get("body", "{}"))
+            if data.get("status_code") == 0:
+                log.info("Successfully deleted ephemeral conversation %s (即用即焚)", conversation_id)
+                return True
+            else:
+                log.warning("delete_conversation %s: status_code=%s desc=%s",
+                            conversation_id, data.get("status_code"), data.get("status_desc"))
+                return False
+        except Exception as exc:
+            log.warning("delete_conversation %s exception: %s", conversation_id, exc)
+            return False
 
     # ------------------------------------------------------------------
     # Samantha endpoint (image/video/music generation)

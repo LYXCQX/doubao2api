@@ -78,6 +78,8 @@
 - **多模态理解**：识图、读 PDF/Word/Excel/代码等 60+ 种文件格式，纯文本模型也能"看懂"图片和文档
 - **多媒体生成**：免费生成图片（文生图、图生图）、音乐、视频，Agent 的输出不再局限于文字
 - **文件中转站**（奇淫技巧）：通过 `/v1/files` 可上传任意文件（最大 1GB）获得一个永久 TOS URI，之后随时凭这个 URI 调用 `/v1/files/download` 换取 7 天有效的下载链接，过期了再换一个就行。这意味着你可以把它当作**免费的跨机器文件传输通道**——Agent A 在服务器 A 上传文件拿到 URI，把 URI 传给 Agent B，Agent B 在另一台服务器上凭 URI 获取下载链接直接拉取文件。无需自建 OSS，无需打通内网，单文件最大 1GB，存储不过期。有兴趣的兄弟可以基于这个开做个文件中转，感觉会很不错
+- **即用即焚（无痕对话）**：请求完成后自动在豆包云端销毁该临时对话（默认开启），彻底防止网页端会话历史被 API 批量调用刷屏污染
+- **自愈式反爬风控与请求平滑**：内置真实验证码 DOM 探测、假警报自动解除、并发平滑调度队列，有效防止沉浸式翻译等并发突发调用触发 WAF 拦截
 
 ⚠️ **不适合编程智能体**：豆包客户端模型**不支持 Function Calling / Tool Use**（无法调用外部工具如文件读写、终端命令、代码搜索等），因此**不适合**作为编程智能体（Claude Code、Codex、OpenCode 等）的后端模型。如果你需要的是能操作代码仓库的 coding agent，请选择原生支持工具调用的模型 API。
 
@@ -105,13 +107,18 @@ pip install git+https://github.com/wangchuxiaoji-oss/doubao2api.git
 git clone https://github.com/wangchuxiaoji-oss/doubao2api.git
 cd doubao2api
 pip install -e .
+playwright install chromium
 ```
 
-### Docker 部署（可选）
+### Docker 部署（推荐）
 
 ```bash
+# 方式一：使用 docker-compose（推荐，自动持久化配置）
+docker compose up -d
+
+# 方式二：使用 docker
 docker build -t doubao2api .
-docker run -d -p 9090:9090 -v ./. doubao_session.json:/app/.doubao_session.json doubao2api
+docker run -d -p 9090:9090 -v doubao_data:/app/data doubao2api
 ```
 
 ### 前置条件
@@ -1026,9 +1033,10 @@ server {
 | `DOUBAO_PORT` | `9090` | 监听端口 |
 | `DOUBAO_HOST` | `0.0.0.0` | 监听地址 |
 | `DOUBAO_API_KEY` | (空=无认证) | Bearer token。设为 `any` 接受任意非空 key |
-| `DOUBAO_RPM_LIMIT` | `20` | 每分钟请求限制（所有端点共享） |
-| `DOUBAO_HEADLESS` | `true` | Chromium 是否无头运行 |
-| `DOUBAO_BROWSER_DATA` | `~/.doubao_browser` | Chromium 持久化用户目录 |
+| `DOUBAO_RPM_LIMIT` | `30` | 每分钟请求限制（所有端点共享） |
+| `DOUBAO_HEADLESS` | `auto` | 浏览器运行模式：`auto` (未登录自动弹窗，已登录静默无头), `true` (纯无头), `false` (始终弹窗) |
+| `DOUBAO_BROWSER_DATA` | `~/.doubao_browser` | Chromium 持久化用户目录（保存登录凭证与指纹） |
+| `DOUBAO_AUTO_DELETE_CONV` | `true` | 即用即焚模式：请求完成后自动在豆包云端删除该临时会话，保持网页侧边栏干净 |
 | `DOUBAO_NOVNC_URL` | 自动推断 | Admin 面板中的 noVNC 地址 |
 | `DOUBAO_NOVNC_PASSWORD` | 空 | 自动拼接到 noVNC URL 的密码参数 |
 
@@ -1044,44 +1052,34 @@ Authorization: Bearer your-api-key
 - `DOUBAO_API_KEY=any`：接受任意非空 Bearer token
 - `DOUBAO_API_KEY=sk-xxx`：仅接受完全匹配的 token
 
-### 会话管理
+### 会话管理与智能启动
 
-**启动行为**：服务启动时打开持久化 Chromium 用户目录（`DOUBAO_BROWSER_DATA`），如果浏览器目录内已有登录态会自动复用。
+**智能启动策略 (`DOUBAO_HEADLESS=auto`)**：
+- **首次启动**：系统检测到本地未登录时，会自动以**桌面可见窗口**打开 Chromium 浏览器，方便直接扫码或输入手机号验证码登录（完美避开字节跳动反爬风控与无头二维码失效问题）。
+- **后续启动**：登录成功后凭证持久化保存在 `DOUBAO_BROWSER_DATA`。之后启动会自动切换为**静默后台（无头）模式**，开机或启动时不弹窗、不打扰桌面工作。
 
-**浏览器 watchdog**：后台每 30 秒检查浏览器是否响应，如果 Chromium 进程异常会自动重启。
+**Web 管理面板热切换**：
+- 在后台网页 `http://localhost:9090/admin` 概览页，提供**一键热切换按钮**：
+  - 处于无头后台时，点击「🖥️ 弹出窗口重新登录」即可无缝唤起浏览器界面；
+  - 登录完毕后，点击「👻 切换为静默后台模式」即可瞬间隐退至后台运行。
 
-**风控处理**：如果接口返回 `710022004`，服务会在 `/health` 中标记 `needs_captcha=true`，此时需要通过 noVNC 或重新登录处理风控，再调用 `/auth/reset_captcha` 恢复服务。
+**手动导入 Cookie**：
+- 如果您习惯在日常浏览器（Chrome / Edge）中使用豆包，可直接在 Admin 面板粘贴 Cookie 字符串一键导入并热激活，无需重新扫码。
 
-**首次部署 Session 获取**：
-
-```bash
-# 方式 1：通过 Dashboard 扫码（推荐）
-# 访问 http://host:port/admin?key=YOUR_API_KEY → 登录 Tab → 扫码
-# 登录成功后 3 秒自动跳转概览页
-
-# 方式 2：API 扫码登录
-curl -X POST http://localhost:9090/v1/session/qr-login \
-  -H "Authorization: Bearer YOUR_KEY"
-# → 返回 base64 QR 码图片，用豆包 App 扫码
-# 轮询状态：
-curl http://localhost:9090/v1/session/qr-login \
-  -H "Authorization: Bearer YOUR_KEY"
-
-# 如遇验证码/风控，可打开 Admin 登录页里的 noVNC 手动处理
-```
+**浏览器看门狗**：后台自动检测浏览器响应，自愈重启并具备多级容错，确保长时间无人值守稳定运行。
 
 ### Admin Dashboard
 
-内置 Web 管理面板（Vue 3 单文件应用，零构建依赖）。
+内置现代 Web 管理面板（Vue 3 单文件应用，零构建依赖）。
 
 **访问**：`http://host:port/admin?key=YOUR_API_KEY`
 
-| 页面 | 功能 |
+| 页面 / 模块 | 功能 |
 |------|------|
-| **概览** | Session 状态、系统配置、Cookie 详情表格、测活按钮 |
-| **登录** | QR 扫码登录、noVNC 手动登录、浏览器截图 |
-| **API 测试** | 选择模型发送请求，支持流式/非流式，思维链折叠展示 |
-| **请求日志** | 最近 100 条请求记录（5s 自动刷新） |
+| **概览** | 浏览器模式（窗口 / 无头）一键切换、Cookie 手动导入、Session 状态、系统配置、实时测活 |
+| **登录** | QR 扫码登录、noVNC 远程交互、浏览器实时截图排查 |
+| **API 测试** | 交互式调试对话，支持流式输出、`reasoning_content` 思维链折叠展示、OpenAI 接入配置指南 |
+| **请求日志** | 最近 100 条请求记录与耗时明细（5s 自动刷新） |
 
 - 如果设置了 `DOUBAO_API_KEY`，HTML 页面和数据 API 都需要认证
 - 概览页每 10 秒自动刷新 session 状态

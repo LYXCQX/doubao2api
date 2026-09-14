@@ -22,6 +22,12 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,12 +59,24 @@ _tool_obfuscator = ToolNameObfuscator(
     enabled=os.environ.get("QIANWEN_OBFUSCATE_TOOLS", "false").lower() == "true"
 )
 
+# ── Auto-delete ephemeral conversations (即用即焚 / Scheme B) ──
+_auto_delete_conv = os.environ.get("DOUBAO_AUTO_DELETE_CONV", "true").lower() in ("true", "1", "yes")
+
+# ── Request Dispatch Smoothing (avoids burst rate-limiting from translation plugins) ──
+_dispatch_lock = asyncio.Lock()
+_last_dispatch_time: float = 0.0
+_MIN_DISPATCH_INTERVAL = float(os.environ.get("DOUBAO_MIN_INTERVAL", "0.2"))  # 200ms
+
 # ── Model definitions ────────────────────────────────────────
 
 CHAT_MODELS: Dict[str, int] = {
-    "doubao": 0,
-    "doubao-pro": 0,
+    "doubao-2.1-turbo": 0,
+    "doubao-2.1-pro": 0,
+    "doubao-2.1": 0,
     "doubao-think": 1,
+    "doubao-2.1-think": 1,
+    "doubao-pro": 0,
+    "doubao": 0,
     "doubao-expert": 3,
 }
 
@@ -230,21 +248,34 @@ def create_app(
     _qianwen: Dict[str, Any] = {}  # holds QianwenClient instance
 
     async def _browser_watchdog():
-        """Background task: check browser health every 30s, auto-restart on crash."""
+        """Background task: check browser health, auto-detect login, auto-restart on crash."""
+        consecutive_dead = 0
         while True:
-            await asyncio.sleep(30)
             client = _browser.get("client")
+            sleep_time = 10 if (client and client.is_ready) else 2
+            await asyncio.sleep(sleep_time)
+
             if client is None:
                 continue
             try:
                 alive = await client.is_alive()
                 if not alive:
-                    log.error("Browser watchdog: process dead, restarting...")
-                    await client.restart()
-                    if client.is_ready:
-                        log.info("Browser watchdog: restart successful")
-                    else:
-                        log.warning("Browser watchdog: restarted but not logged in")
+                    consecutive_dead += 1
+                    log.warning("Browser watchdog: health check failed (%d/3)", consecutive_dead)
+                    if consecutive_dead >= 3:
+                        log.error("Browser watchdog: process dead 3 consecutive checks, restarting...")
+                        await client.restart()
+                        consecutive_dead = 0
+                else:
+                    consecutive_dead = 0
+                    if not client.is_ready:
+                        await client._check_login_state()
+                        if client.is_ready:
+                            log.info("Browser client logged in successfully! sessionid confirmed.")
+                            raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
+                            if not client.headless and raw_headless in ("auto", "true"):
+                                log.info("Auto-switching to background headless mode now...")
+                                await client.switch_mode(headless=True)
             except Exception as e:
                 log.error("Browser watchdog error: %s", e)
 
@@ -254,12 +285,23 @@ def create_app(
         logging.getLogger("doubao2api.browser_client").setLevel(logging.INFO)
         logging.getLogger("doubao2api.browser_client").addHandler(logging.StreamHandler())
 
-        # Start browser client
-        headless = os.environ.get("DOUBAO_HEADLESS", "true").lower() == "true"
+        # Start browser client (auto: headless if logged in, window if not logged in)
         user_data_dir = os.environ.get(
             "DOUBAO_BROWSER_DATA",
             os.path.join(os.path.expanduser("~"), ".doubao_browser"),
         )
+        raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
+        if raw_headless == "auto":
+            is_logged_in = BrowserClient.is_profile_logged_in(user_data_dir)
+            headless = is_logged_in
+            log.info(
+                "DOUBAO_HEADLESS=auto: profile logged_in=%s -> launch headless=%s",
+                is_logged_in,
+                headless,
+            )
+        else:
+            headless = raw_headless == "true"
+
         client = BrowserClient(headless=headless, user_data_dir=user_data_dir)
         await client.start()
         _browser["client"] = client
@@ -268,8 +310,13 @@ def create_app(
             log.info("Browser client ready (already logged in)")
         else:
             log.warning(
-                "Browser not logged in. Visit /auth to scan QR code."
+                "Browser not logged in. Visit /auth or scan QR in the opened browser window."
             )
+            raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
+            can_display = bool(os.environ.get("DISPLAY")) if os.name != "nt" else True
+            if client.headless and raw_headless in ("auto", "false") and can_display:
+                log.info("Session not authenticated: switching to visible window for QR login...")
+                await client.switch_mode(headless=False)
 
         # Start browser watchdog
         watchdog_task = asyncio.create_task(_browser_watchdog())
@@ -290,6 +337,18 @@ def create_app(
             except Exception as e:
                 log.warning("Qianwen client failed to start: %s", e)
                 qw_client = None
+
+        # Auto open admin dashboard in default browser
+        if os.environ.get("DOUBAO_AUTO_OPEN", "true").lower() == "true":
+            server_port = int(os.environ.get("DOUBAO_PORT", "9090"))
+            async def _auto_open():
+                await asyncio.sleep(1.5)
+                try:
+                    import webbrowser
+                    webbrowser.open(f"http://127.0.0.1:{server_port}/admin")
+                except Exception:
+                    pass
+            asyncio.create_task(_auto_open())
 
         yield
 
@@ -352,11 +411,6 @@ def create_app(
             raise HTTPException(
                 status_code=503,
                 detail="Not logged in. Visit /auth to scan QR code.",
-            )
-        if client.needs_captcha:
-            raise HTTPException(
-                status_code=503,
-                detail="Captcha verification required (710022004). Please complete captcha via VNC or re-login.",
             )
         return client
 
@@ -534,13 +588,47 @@ def create_app(
                     detail=f"Unknown model '{body.model}'. Available: {', '.join(all_models)}",
                 )
             model_name = body.model
+            # Allow enable_thinking or reasoning_effort to dynamically control thinking mode
+            if body.enable_thinking is True or (body.reasoning_effort and body.reasoning_effort in ("medium", "high")):
+                use_deep_think = 1 if use_deep_think != 3 else 3
+            elif body.enable_thinking is False or (body.reasoning_effort and body.reasoning_effort == "none"):
+                use_deep_think = 0
+
             prompt, file_refs = _extract_prompt_and_file_refs(body.messages)
             if not prompt:
                 raise HTTPException(status_code=400, detail="No text content")
 
         await bucket.acquire()
         client = _get_client()
+
+        # ── Self-healing captcha check: verify if a real captcha modal is actually visible in DOM ──
+        if client.needs_captcha:
+            if not await client.is_captcha_visible():
+                log.info("Auto-healed: cleared false alarm captcha flag (no visible captcha in DOM)")
+                client.clear_captcha()
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Captcha verification required. Please complete the slider in the browser window.",
+                )
+
+        # ── Request Dispatch Smoothing (anti-burst rate limit) ──
+        global _last_dispatch_time
+        async with _dispatch_lock:
+            now = time.time()
+            gap = now - _last_dispatch_time
+            if gap < _MIN_DISPATCH_INTERVAL:
+                await asyncio.sleep(_MIN_DISPATCH_INTERVAL - gap)
+            _last_dispatch_time = time.time()
+
         request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+
+        # Determine whether to auto-delete ephemeral conversation after completion (Scheme B: 即用即焚)
+        header_del = request.headers.get("x-auto-delete")
+        if header_del is not None:
+            auto_delete = header_del.lower() in ("true", "1", "yes")
+        else:
+            auto_delete = _auto_delete_conv and (not body.conversation_id)
 
         if body.stream:
             if not has_tools:
@@ -554,7 +642,8 @@ def create_app(
                 _stream_chat(client, prompt, use_deep_think, request_id, model_name,
                              conversation_id=body.conversation_id, bot_id=body.bot_id,
                              has_tools=has_tools,
-                             messages_for_counting=body.messages),
+                             messages_for_counting=body.messages,
+                             auto_delete=auto_delete),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
@@ -637,6 +726,11 @@ def create_app(
         }
         if message.get("conversation_id"):
             resp_data["conversation_id"] = message["conversation_id"]
+
+        # Auto-delete ephemeral conversation in background (即用即焚 / Scheme B)
+        if auto_delete and message.get("conversation_id"):
+            asyncio.create_task(_delayed_delete(client, message["conversation_id"]))
+
         return JSONResponse(resp_data)
 
     # ------------------------------------------------------------------
@@ -1162,6 +1256,15 @@ def create_app(
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         })
 
+    async def _delayed_delete(client: BrowserClient, conversation_id: str, delay: float = 0.8):
+        """Asynchronously delete ephemeral conversation in background (即用即焚)."""
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            await client.delete_conversation(conversation_id)
+        except Exception as exc:
+            log.warning("Delayed delete failed for %s: %s", conversation_id, exc)
+
     async def _collect_chat_response(
         client: BrowserClient,
         prompt: str,
@@ -1203,6 +1306,7 @@ def create_app(
             if event.get("error_code"):
                 code = event.get("error_code", 0)
                 msg = event.get("error_msg", "")
+                log.error("RAW DOUBAO ERROR EVENT: %s", json.dumps(event, ensure_ascii=False))
                 client.record_failure(code)
                 raise RuntimeError(f"Error code={code}: {msg}")
 
@@ -1282,6 +1386,7 @@ def create_app(
         bot_id: Optional[str] = None,
         has_tools: bool = False,
         messages_for_counting: Optional[list] = None,
+        auto_delete: bool = False,
     ):
         """Generate real-time SSE stream in OpenAI format via httpx streaming.
 
@@ -1352,6 +1457,7 @@ def create_app(
                 if event_type == "STREAM_ERROR" or event.get("error_code"):
                     code = event.get("error_code", 0)
                     msg = event.get("error_msg", "unknown error")
+                    log.error("RAW DOUBAO STREAM ERROR EVENT: %s", json.dumps(event, ensure_ascii=False))
                     client.record_failure(code)
                     chunk = _make_chunk(
                         {"content": f"[Error code={code}: {msg}]"}
@@ -1619,6 +1725,10 @@ def create_app(
         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
+        # Ephemeral conversation auto-delete (Scheme B: 即用即焚)
+        if auto_delete and result_conversation_id:
+            asyncio.create_task(_delayed_delete(client, result_conversation_id))
+
     # ── Admin Dashboard & Auth ──
 
     @app.get("/admin", response_class=HTMLResponse)
@@ -1667,6 +1777,7 @@ def create_app(
                 "video": ["doubao-video"],
                 "audio": ["doubao-music"],
             },
+            "auto_delete_conv": _auto_delete_conv,
         })
 
     @app.get("/admin/api/logs")
@@ -1692,6 +1803,38 @@ def create_app(
         except Exception:
             return JSONResponse({"cookies": [], "total": 0})
 
+    @app.post("/admin/api/cookies/import")
+    async def admin_cookies_import(request: Request):
+        """Import cookie string or dict into browser context."""
+        _check_auth(request)
+        client = _browser.get("client")
+        if client is None:
+            raise HTTPException(status_code=503, detail="Browser not initialized")
+        body = await request.json()
+        raw = body.get("cookies", "")
+        cookie_dict = {}
+        if isinstance(raw, dict):
+            cookie_dict = raw
+        elif isinstance(raw, str):
+            raw_str = raw.strip()
+            if "=" not in raw_str and len(raw_str) > 10:
+                cookie_dict["sessionid"] = raw_str
+            else:
+                for part in raw_str.split(";"):
+                    part = part.strip()
+                    if not part or "=" not in part:
+                        continue
+                    k, v = part.split("=", 1)
+                    cookie_dict[k.strip()] = v.strip()
+
+        ok = await client.inject_cookies_and_reload(cookie_dict)
+        return {
+            "success": ok,
+            "cookies_count": len(cookie_dict),
+            "has_sessionid": "sessionid" in cookie_dict,
+            "ready": client.is_ready
+        }
+
     @app.post("/admin/api/probe")
     async def admin_probe(request: Request):
         """Probe session by making a real chat request."""
@@ -1704,6 +1847,7 @@ def create_app(
             result = await client.chat("1+1=?只回答数字", use_deep_think=0)
             ms = int((time.time() - t0) * 1000)
             content = result.get("text", "")
+            client.record_success()
             return JSONResponse({"status": "healthy", "ms": ms, "response": content[:100]})
         except Exception as e:
             return JSONResponse({"status": "error", "message": str(e)[:200]})
@@ -1761,6 +1905,13 @@ def create_app(
 
         page_url = client.page.url if client.page else ""
         login_btn_count = 0
+        has_session = False
+        if client._context:
+            try:
+                cookies = await client._context.cookies("https://www.doubao.com")
+                has_session = any(c["name"] == "sessionid" and c.get("value") for c in cookies)
+            except Exception:
+                pass
         if client.page:
             try:
                 login_btn = client.page.locator('button:has-text("登录")')
@@ -1768,7 +1919,7 @@ def create_app(
             except Exception:
                 pass
 
-        actual_logged_in = client.is_ready and login_btn_count == 0
+        actual_logged_in = has_session or (client.is_ready and login_btn_count == 0)
 
         return {
             "logged_in": actual_logged_in,
@@ -1777,6 +1928,32 @@ def create_app(
             "page_url": page_url,
             "device_id": client._device_id or "",
             "web_id": client._web_id or "",
+            "headless": client.headless,
+            "mode": "headless" if client.headless else "window",
+            "needs_captcha": client.needs_captcha,
+        }
+
+    @app.get("/admin/api/browser/status")
+    async def admin_browser_status(request: Request):
+        """Return browser mode and session details."""
+        return await _get_login_status(request)
+
+    @app.post("/admin/api/browser/mode")
+    async def admin_browser_set_mode(request: Request):
+        """Dynamically switch browser mode between headless and windowed GUI."""
+        _check_auth(request)
+        client = _browser.get("client")
+        if client is None:
+            raise HTTPException(status_code=503, detail="Browser client not initialized")
+        body = await request.json()
+        target_headless = bool(body.get("headless", False))
+        log.info("API request: switch browser mode to headless=%s", target_headless)
+        ok = await client.switch_mode(target_headless)
+        return {
+            "status": "ok" if ok else "failed",
+            "headless": client.headless,
+            "mode": "headless" if client.headless else "window",
+            "logged_in": client.is_ready,
         }
 
     @app.post("/auth/eval")
@@ -1903,6 +2080,55 @@ def create_app(
         except Exception as e:
             log.error("Failed to inject QR cookies: %s", e)
             _qr_login_state["browser_ready"] = False
+
+    @app.get("/admin/api/browser/screenshot")
+    async def admin_browser_screenshot(request: Request):
+        """Return screenshot of browser page as PNG."""
+        from fastapi.responses import Response
+        client = _browser.get("client")
+        if client is None or client.page is None:
+            raise HTTPException(status_code=503, detail="Browser not initialized")
+        try:
+            buf = await client.page.screenshot(type="png")
+            return Response(content=buf, media_type="image/png")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/admin/api/open-doubao")
+    async def admin_open_doubao(request: Request):
+        """Open doubao.com in system default browser for user login."""
+        import webbrowser
+        try:
+            webbrowser.open("https://www.doubao.com/chat/")
+            return {"status": "ok", "url": "https://www.doubao.com/chat/"}
+        except Exception as e:
+            return {"status": "error", "detail": str(e)}
+
+    @app.post("/admin/api/browser/force-window")
+    async def admin_browser_force_window(request: Request):
+        """Force launch or bring up the visible browser window."""
+        client = _browser.get("client")
+        if client is None:
+            raise HTTPException(status_code=503, detail="Browser not initialized")
+        try:
+            if client.headless:
+                await client.switch_mode(headless=False)
+            if client.page:
+                await client.page.bring_to_front()
+                # Click login button if not logged in and modal not open
+                if not client.is_ready:
+                    try:
+                        modal = client.page.locator('[role="dialog"], .semi-modal')
+                        if await modal.count() == 0:
+                            btn = client.page.locator('button:has-text("登录")')
+                            if await btn.count() > 0 and await btn.first.is_visible():
+                                await btn.first.click()
+                    except Exception:
+                        pass
+            return {"status": "ok", "mode": "window", "headless": client.headless}
+        except Exception as e:
+            log.error("Failed to force window: %s", e)
+            return {"status": "error", "detail": str(e)}
 
     return app
 

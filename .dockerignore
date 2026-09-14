@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+.env
+scratch
+tests
+dist
+build
+*.egg-info
+.login_success

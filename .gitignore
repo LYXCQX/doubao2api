@@ -1,7 +1,10 @@
-# Sensitive session data
+# Sensitive session data and profiles
 .doubao_session.json
+.doubao_browser/
+.qianwen_browser/
 decrypted_cookies.json
 .env
+*.log
 
 # Python
 __pycache__/
@@ -18,12 +21,17 @@ venv/
 .vscode/
 .idea/
 
-# Generated artifacts
+# Generated artifacts & temp files
 doubao_qr_login.png
+test_shot*.png
+current_*.png
+*.test.*
 server_out.txt
 server_err.txt
 testpic.webp
-*.test.*
+.login_success
+scratch/
+data/
 
 # OS
 Thumbs.db

@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-    { name = "wangchuxiaoji-oss" },
+    { name = "SeiShonagon520" },
 ]
 keywords = ["doubao", "豆包", "openai", "api", "reverse-engineering"]
 classifiers = [
@@ -36,9 +36,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/wangchuxiaoji-oss/doubao2api"
-Repository = "https://github.com/wangchuxiaoji-oss/doubao2api"
-Issues = "https://github.com/wangchuxiaoji-oss/doubao2api/issues"
+Homepage = "https://github.com/SeiShonagon520/doubao2api"
+Repository = "https://github.com/SeiShonagon520/doubao2api"
+Issues = "https://github.com/SeiShonagon520/doubao2api/issues"
 
 [project.scripts]
 doubao2api = "doubao2api.__main__:main"

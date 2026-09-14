@@ -57,6 +57,7 @@ class BrowserClient:
         # Stream bridge: request_id -> asyncio.Queue for SSE chunks
         self._stream_queues: Dict[str, asyncio.Queue] = {}
         self._bridge_ready: bool = False
+        self._user_agent: str = ""
 
     @property
     def is_ready(self) -> bool:
@@ -98,11 +99,15 @@ class BrowserClient:
             selectors = [
                 '#captcha_container',
                 '.captcha_verify_container',
+                '#captcha-verify-image',
+                '.secsdk-captcha-wrapper',
                 '.verify-bar-close',
                 '.secsdk-captcha-drag-icon',
                 '[class*="captcha-modal"]',
                 '[class*="captcha_verify"]',
                 '.semi-modal:has-text("验证")',
+                'iframe[src*="verify"]',
+                'iframe[id*="captcha"]',
             ]
             for sel in selectors:
                 loc = self._page.locator(sel)
@@ -237,6 +242,11 @@ class BrowserClient:
         log.info("Navigating to %s", CHAT_URL)
         await self._page.goto(CHAT_URL, wait_until="load", timeout=60000)
         await asyncio.sleep(3)
+        try:
+            self._user_agent = await self._page.evaluate("() => navigator.userAgent")
+            log.info("Detected browser User-Agent: %s", self._user_agent)
+        except Exception:
+            pass
 
         # Init httpx
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(180, connect=10))
@@ -645,6 +655,10 @@ class BrowserClient:
                 if part.startswith("passport_csrf_token="):
                     csrf_token = part.split("=", 1)[1]
                     break
+        ua = self._user_agent or (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        )
         headers = {
             "Accept": "*/*",
             "Accept-Language": "zh-CN,zh;q=0.9",
@@ -652,10 +666,7 @@ class BrowserClient:
             "Cookie": cookie_str,
             "Origin": DOUBAO_URL,
             "Referer": CHAT_URL,
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            ),
+            "User-Agent": ua,
             "agw-js-conv": "str, str",
         }
         if csrf_token:

@@ -54,6 +54,7 @@ class BrowserClient:
         self._consecutive_failures: int = 0
         self._last_error_code: int = 0
         self._needs_captcha: bool = False
+        self._mode_lock: asyncio.Lock = asyncio.Lock()
         # Stream bridge: request_id -> asyncio.Queue for SSE chunks
         self._stream_queues: Dict[str, asyncio.Queue] = {}
         self._bridge_ready: bool = False
@@ -92,9 +93,23 @@ class BrowserClient:
         log.info("Captcha flag cleared")
 
     async def is_captcha_visible(self) -> bool:
-        """Check whether a real captcha modal/slider is actually visible in the browser DOM."""
+        """Check whether a real captcha modal/slider/iframe is actually visible in the browser DOM."""
         if not self._page:
             return False
+        try:
+            # Fast check across all iframes for ByteDance captcha/verify endpoints
+            has_iframe = await self._page.evaluate("""() => {
+                const frames = Array.from(document.querySelectorAll('iframe'));
+                return frames.some(f => {
+                    const s = (f.src || '').toLowerCase();
+                    return s.includes('verify') || s.includes('captcha') || s.includes('zijieapi') || s.includes('bytedance.com');
+                });
+            }""")
+            if has_iframe:
+                return True
+        except Exception:
+            pass
+
         try:
             selectors = [
                 '#captcha_container',
@@ -107,7 +122,9 @@ class BrowserClient:
                 '[class*="captcha_verify"]',
                 '.semi-modal:has-text("验证")',
                 'iframe[src*="verify"]',
-                'iframe[id*="captcha"]',
+                'iframe[src*="captcha"]',
+                'iframe[src*="bytedance.com"]',
+                'iframe[src*="zijieapi.com"]',
             ]
             for sel in selectors:
                 loc = self._page.locator(sel)
@@ -120,15 +137,38 @@ class BrowserClient:
         except Exception:
             return False
 
+    async def auto_popup_for_captcha(self) -> bool:
+        """If captcha is detected and running headless with desktop GUI available,
+        automatically switch to windowed mode and bring the window to front."""
+        can_display = (os.name == "nt") or bool(os.environ.get("DISPLAY"))
+        if not can_display:
+            log.info("Cannot auto-popup browser window: no desktop GUI display available")
+            return False
+
+        if self.headless:
+            log.warning("Captcha detected! Auto-switching browser from headless to windowed GUI mode...")
+            try:
+                await self.switch_mode(headless=False)
+            except Exception as e:
+                log.error("Failed to auto-switch browser mode to windowed: %s", e)
+                return False
+
+        if self._page:
+            try:
+                await self._page.bring_to_front()
+            except Exception:
+                pass
+        return True
+
     def record_failure(self, error_code: int = 0):
-        """Track consecutive failures. Mark captcha-needed on 710022004."""
+        """Track consecutive failures. Mark captcha-needed on 710022002 or 710022004."""
         self._consecutive_failures += 1
         self._last_error_code = error_code
-        if error_code == 710022004:
+        if error_code in (710022002, 710022004):
             self._needs_captcha = True
-            log.warning("Captcha flag marked on 710022004")
-        if self._consecutive_failures >= 10:
-            log.error("10 consecutive failures - marking not ready")
+            log.warning("Captcha/risk flag marked on error code %s", error_code)
+        if self._consecutive_failures >= 10 and not self._needs_captcha:
+            log.error("10 consecutive failures (non-captcha) - marking not ready")
             self._ready = False
 
     # ------------------------------------------------------------------
@@ -306,13 +346,14 @@ class BrowserClient:
             log.warning("Cannot switch to windowed GUI mode on Linux/Docker without DISPLAY")
             return False
 
-        if self.headless == headless and self._ready:
-            log.info("Browser mode is already headless=%s", headless)
-            return True
-        log.info("Switching browser mode: headless=%s -> headless=%s", self.headless, headless)
-        self.headless = headless
-        await self.restart()
-        return self._ready
+        async with self._mode_lock:
+            if self.headless == headless and self._ready:
+                log.info("Browser mode is already headless=%s", headless)
+                return True
+            log.info("Switching browser mode: headless=%s -> headless=%s", self.headless, headless)
+            self.headless = headless
+            await self.restart()
+            return self._ready
 
     @classmethod
     def is_profile_logged_in(cls, user_data_dir: Optional[str]) -> bool:

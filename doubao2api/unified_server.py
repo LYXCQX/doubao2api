@@ -248,11 +248,11 @@ def create_app(
     _qianwen: Dict[str, Any] = {}  # holds QianwenClient instance
 
     async def _browser_watchdog():
-        """Background task: check browser health, auto-detect login, auto-restart on crash."""
+        """Background task: check browser health, auto-detect login, auto-restart on crash, auto-heal captcha."""
         consecutive_dead = 0
         while True:
             client = _browser.get("client")
-            sleep_time = 10 if (client and client.is_ready) else 2
+            sleep_time = 10 if (client and client.is_ready and not client.needs_captcha) else 2
             await asyncio.sleep(sleep_time)
 
             if client is None:
@@ -268,12 +268,24 @@ def create_app(
                         consecutive_dead = 0
                 else:
                     consecutive_dead = 0
+                    # Auto-heal captcha if user completed it in the window
+                    if client.needs_captcha:
+                        if not await client.is_captcha_visible():
+                            log.info("Browser watchdog: captcha resolved! Auto-clearing captcha flag.")
+                            client.clear_captcha()
+                            client.record_success()
+                            client._ready = True
+                            raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
+                            if not client.headless and raw_headless in ("auto", "true"):
+                                log.info("Captcha resolved. Auto-switching back to background headless mode...")
+                                await client.switch_mode(headless=True)
+
                     if not client.is_ready:
                         await client._check_login_state()
                         if client.is_ready:
                             log.info("Browser client logged in successfully! sessionid confirmed.")
                             raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
-                            if not client.headless and raw_headless in ("auto", "true"):
+                            if not client.headless and not client.needs_captcha and raw_headless in ("auto", "true"):
                                 log.info("Auto-switching to background headless mode now...")
                                 await client.switch_mode(headless=True)
             except Exception as e:
@@ -407,7 +419,7 @@ def create_app(
         client = _browser.get("client")
         if client is None:
             raise HTTPException(status_code=503, detail="Browser not initialized")
-        if not client.is_ready:
+        if not client.is_ready and not client.needs_captcha:
             raise HTTPException(
                 status_code=503,
                 detail="Not logged in. Visit /auth to scan QR code.",
@@ -606,10 +618,18 @@ def create_app(
             if not await client.is_captcha_visible():
                 log.info("Auto-healed: cleared false alarm captcha flag (no visible captcha in DOM)")
                 client.clear_captcha()
+                client.record_success()
+                client._ready = True
             else:
+                popped = await client.auto_popup_for_captcha()
+                action_msg = (
+                    "已为您在桌面上自动弹出 Chrome 浏览器窗口，请在窗口中拖拽/点击完成验证码后重试；"
+                    if popped
+                    else "请在控制台 http://127.0.0.1:9090/admin 点击【切换窗口模式】完成人机验证；"
+                )
                 raise HTTPException(
                     status_code=503,
-                    detail="Captcha verification required. Please complete the slider in the browser window.",
+                    detail=f"触发字节跳动人机验证：{action_msg}亦可导入日常已登录 Cookie 恢复服务。",
                 )
 
         # ── Request Dispatch Smoothing (anti-burst rate limit) ──
@@ -1308,6 +1328,14 @@ def create_app(
                 msg = event.get("error_msg", "")
                 log.error("RAW DOUBAO ERROR EVENT: %s", json.dumps(event, ensure_ascii=False))
                 client.record_failure(code)
+                if code in (710022002, 710022004):
+                    popped = await client.auto_popup_for_captcha()
+                    action_hint = (
+                        "已为您在桌面上自动弹出 Chrome 窗口，请完成验证码后重试；亦可访问 http://127.0.0.1:9090/admin 处置"
+                        if popped
+                        else "请访问 http://127.0.0.1:9090/admin 处置人机验证或重新导入 Cookie"
+                    )
+                    raise RuntimeError(f"Error code={code}: {msg}（{action_hint}）")
                 raise RuntimeError(f"Error code={code}: {msg}")
 
             # Extract conversation_id for multi-turn
@@ -1459,9 +1487,20 @@ def create_app(
                     msg = event.get("error_msg", "unknown error")
                     log.error("RAW DOUBAO STREAM ERROR EVENT: %s", json.dumps(event, ensure_ascii=False))
                     client.record_failure(code)
-                    chunk = _make_chunk(
-                        {"content": f"[Error code={code}: {msg}]"}
-                    )
+                    if code in (710022002, 710022004):
+                        popped = await client.auto_popup_for_captcha()
+                        action_hint = (
+                            "已为您在桌面上自动弹出 Chrome 浏览器窗口，请拖拽/点击完成验证码后重试；亦可访问控制台 http://127.0.0.1:9090/admin 处置。"
+                            if popped
+                            else "请访问控制台 http://127.0.0.1:9090/admin 点击【切换窗口模式】完成验证码，或重新导入已登录 Cookie。"
+                        )
+                        chunk = _make_chunk(
+                            {"content": f"\n\n[风控提示: 触发字节跳动人机验证 (Error code={code}: {msg})。{action_hint}]"}
+                        )
+                    else:
+                        chunk = _make_chunk(
+                            {"content": f"[Error code={code}: {msg}]"}
+                        )
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
                     return

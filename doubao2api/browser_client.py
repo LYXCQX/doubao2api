@@ -37,8 +37,8 @@ DEFAULT_BOT_ID = "7338286299411103781"
 class BrowserClient:
     """Manages Playwright for login and in-browser fetch for API calls."""
 
-    def __init__(self, headless: bool = True, user_data_dir: Optional[str] = None):
-        self.headless = headless
+    def __init__(self, headless: bool = False, user_data_dir: Optional[str] = None):
+        self.headless = False
         self.user_data_dir = user_data_dir
         self._playwright = None
         self._context: Optional[BrowserContext] = None
@@ -143,20 +143,17 @@ class BrowserClient:
             return False
 
     async def auto_popup_for_captcha(self) -> bool:
-        """If captcha is detected and running headless with desktop GUI available,
-        automatically switch to windowed mode and bring the window to front."""
+        """If captcha is detected, ensure browser window is visible and brought to front."""
         can_display = (os.name == "nt") or bool(os.environ.get("DISPLAY"))
         if not can_display:
             log.info("Cannot auto-popup browser window: no desktop GUI display available")
             return False
 
-        if self.headless:
-            log.warning("Captcha detected! Auto-switching browser from headless to windowed GUI mode...")
-            try:
-                await self.switch_mode(headless=False)
-            except Exception as e:
-                log.error("Failed to auto-switch browser mode to windowed: %s", e)
-                return False
+        try:
+            await self.switch_mode(headless=False)
+        except Exception as e:
+            log.error("Failed to bring browser window to front: %s", e)
+            return False
 
         if self._page:
             try:
@@ -288,14 +285,9 @@ class BrowserClient:
         return candidates
 
     async def start(self):
-        """Launch browser, navigate to Doubao, init httpx client."""
-        # On Linux/Docker without a DISPLAY, enforce headless mode
-        if not os.environ.get("DISPLAY") and (os.name != "nt"):
-            if not self.headless:
-                log.info("No DISPLAY available (Linux/Docker): enforcing headless=True")
-                self.headless = True
-
-        log.info("Starting BrowserClient (headless=%s)", self.headless)
+        """Launch headed browser window, navigate to Doubao, init httpx client."""
+        self.headless = False
+        log.info("Starting BrowserClient (headed native desktop window)")
         # Clean stale browser lock files if any were left behind from previous runs
         if self.user_data_dir and os.path.exists(self.user_data_dir):
             for lock_name in ("lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"):
@@ -506,25 +498,19 @@ class BrowserClient:
         await self.start()
         log.info("BrowserClient restarted. ready=%s", self._ready)
 
-    async def switch_mode(self, headless: bool) -> bool:
-        """Dynamically switch between headless and windowed GUI mode without losing session."""
-        if not headless and not os.environ.get("DISPLAY") and (os.name != "nt"):
-            log.warning("Cannot switch to windowed GUI mode on Linux/Docker without DISPLAY")
-            return False
-
+    async def switch_mode(self, headless: bool = False) -> bool:
+        """Ensure browser window is active, healthy, and brought to front (headed mode)."""
+        self.headless = False
         async with self._mode_lock:
-            alive = False
             if self._page and not self._page.is_closed():
                 try:
-                    alive = await self.is_alive()
+                    if await self.is_alive():
+                        await self._page.bring_to_front()
+                        log.info("Browser window brought to front")
+                        return True
                 except Exception:
-                    alive = False
-
-            if self.headless == headless and self._ready and alive:
-                log.info("Browser mode is already headless=%s and alive", headless)
-                return True
-            log.info("Switching browser mode: headless=%s -> headless=%s (alive=%s)", self.headless, headless, alive)
-            self.headless = headless
+                    pass
+            log.info("Browser window not active, relaunching window...")
             await self.restart()
             return self._ready
 

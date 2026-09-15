@@ -127,7 +127,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
           <span class="text-2xl">⚠️</span>
           <div>
             <div class="text-sm font-bold text-amber-300">安全风控状态预警 (needs_captcha)</div>
-            <div class="text-xs text-amber-400/80 mt-0.5">检测到验证拦截标志。若打开的 Chrome 窗口中未见滑块拼图（偶发误判），可直接点击右侧按钮一键解锁自愈。</div>
+            <div class="text-xs text-amber-400/80 mt-0.5">检测到验证拦截标志。若打开的浏览器窗口中未见滑块拼图（偶发误判），可直接点击右侧按钮一键解锁自愈。</div>
           </div>
         </div>
         <button @click="resetCaptcha" class="btn btn-sm bg-amber-600 hover:bg-amber-500 text-white font-medium shrink-0 ml-4">
@@ -151,20 +151,20 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
           </p>
         </div>
 
-        <!-- Card 2: Browser mode -->
+        <!-- Card 2: Browser Engine Status -->
         <div class="metric card">
           <div class="text-xs text-slate-400 mb-1 flex items-center justify-between">
-            <span>运行内核 / 模式</span>
-            <button @click="toggleBrowserMode" :disabled="modeSwitching" class="text-indigo-400 hover:text-indigo-300 text-xs font-normal">
-              {{modeSwitching?'切换中...':'[切换]'}}
+            <span>浏览器环境 (全时有头窗口)</span>
+            <button @click="forceWindow" :disabled="windowActionLoading" class="text-indigo-400 hover:text-indigo-300 text-xs font-normal">
+              {{windowActionLoading?'置顶中...':'[前台置顶]'}}
             </button>
           </div>
           <div class="text-lg font-bold text-white flex items-center gap-2">
-            <span>{{browserMode.headless?'👻 静默后台 (无头)':'🖥️ 桌面窗口 (有头，抗风控)'}}</span>
-            <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700 capitalize">{{browserMode.browserName || 'Chromium'}}</span>
+            <span>🖥️ 原生桌面窗口</span>
+            <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700 capitalize">{{browserMode.browserName || 'Chrome/Edge'}}</span>
           </div>
           <p class="text-xs text-slate-400 mt-2">
-            {{browserMode.headless?'无头模式可能在高频并发时触发风控验证码。':'有头模式具备真实显卡与物理屏幕指纹，极不易触发风控。'}}
+            独占物理显卡 GPU 与真实环境指纹，免疫无头风控。可随时最小化到任务栏。
           </p>
         </div>
 
@@ -697,22 +697,7 @@ createApp({
     }
 
     async function toggleBrowserMode(){
-      modeSwitching.value = true;
-      try{
-        const targetHeadless = !browserMode.headless;
-        const r = await api('/admin/api/browser/mode', {
-          method: 'POST',
-          body: JSON.stringify({ headless: targetHeadless })
-        });
-        browserMode.headless = r.headless;
-        browserMode.mode = r.mode;
-        if(r.browser_name) browserMode.browserName = r.browser_name;
-        await fetchSession();
-      }catch(e){
-        alert('切换模式失败: ' + e.message);
-      }finally{
-        modeSwitching.value = false;
-      }
+      await forceWindow();
     }
 
     async function forceWindow(){

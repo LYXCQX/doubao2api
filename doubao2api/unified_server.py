@@ -35,7 +35,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .browser_client import BrowserClient
-from .qianwen_client import QianwenClient, QIANWEN_MODELS
 from .tool_calling import (
     build_tool_system_prompt,
     convert_messages_with_tools,
@@ -53,11 +52,6 @@ from .tool_calling import (
 from .token_counter import count_tokens, count_messages_tokens, SAFETY_FACTOR
 
 log = logging.getLogger("doubao_unified")
-
-# ── Tool Name Obfuscation (enabled via QIANWEN_OBFUSCATE_TOOLS=true) ──
-_tool_obfuscator = ToolNameObfuscator(
-    enabled=os.environ.get("QIANWEN_OBFUSCATE_TOOLS", "false").lower() == "true"
-)
 
 # ── Auto-delete ephemeral conversations (即用即焚 / Scheme B) ──
 _auto_delete_conv = os.environ.get("DOUBAO_AUTO_DELETE_CONV", "true").lower() in ("true", "1", "yes")
@@ -80,15 +74,9 @@ CHAT_MODELS: Dict[str, int] = {
     "doubao-expert": 3,
 }
 
-# Qianwen models (routed to QianwenClient)
-QIANWEN_MODEL_NAMES = set(QIANWEN_MODELS.keys())
-
 ALL_MODELS = [
     {"id": m, "object": "model", "owned_by": "doubao", "created": 0}
     for m in CHAT_MODELS
-] + [
-    {"id": m, "object": "model", "owned_by": "qianwen", "created": 0}
-    for m in QIANWEN_MODELS
 ] + [
     {"id": "doubao-image", "object": "model", "owned_by": "doubao", "created": 0},
     {"id": "doubao-music", "object": "model", "owned_by": "doubao", "created": 0},
@@ -245,7 +233,6 @@ def create_app(
     """Build and return a configured FastAPI application."""
 
     _browser: Dict[str, Any] = {}  # holds BrowserClient instance
-    _qianwen: Dict[str, Any] = {}  # holds QianwenClient instance
 
     async def _browser_watchdog():
         """Background task: check browser health, auto-detect login, auto-restart on crash, auto-heal captcha."""
@@ -263,7 +250,7 @@ def create_app(
                     consecutive_dead += 1
                     log.warning("Browser watchdog: health check failed (%d/3)", consecutive_dead)
                     if consecutive_dead >= 3:
-                        log.error("Browser watchdog: process dead 3 consecutive checks, restarting...")
+                        log.error("Browser watchdog: process dead 3 consecutive checks, auto-relaunching window...")
                         await client.restart()
                         consecutive_dead = 0
                 else:
@@ -275,19 +262,11 @@ def create_app(
                             client.clear_captcha()
                             client.record_success()
                             client._ready = True
-                            raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
-                            if not client.headless and raw_headless == "true":
-                                log.info("Captcha resolved. Auto-switching back to background headless mode...")
-                                await client.switch_mode(headless=True)
 
                     if not client.is_ready:
                         await client._check_login_state()
                         if client.is_ready:
                             log.info("Browser client logged in successfully! sessionid confirmed.")
-                            raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
-                            if not client.headless and not client.needs_captcha and raw_headless == "true":
-                                log.info("Auto-switching to background headless mode...")
-                                await client.switch_mode(headless=True)
             except Exception as e:
                 log.error("Browser watchdog error: %s", e)
 
@@ -297,27 +276,12 @@ def create_app(
         logging.getLogger("doubao2api.browser_client").setLevel(logging.INFO)
         logging.getLogger("doubao2api.browser_client").addHandler(logging.StreamHandler())
 
-        # Start browser client (auto: headed window on desktop for stealth, headless on Linux/Docker)
+        # Start browser client (permanently headed window for maximum anti-risk stealth & stability)
         user_data_dir = os.environ.get(
             "DOUBAO_BROWSER_DATA",
             os.path.join(os.path.expanduser("~"), ".doubao_browser"),
         )
-        raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
-        if raw_headless == "auto":
-            # On desktop systems (Windows, macOS, or Linux with DISPLAY), default to headed GUI
-            # for maximum anti-risk stealth, real GPU rendering, and instant visual feedback.
-            import sys
-            has_display = bool(os.environ.get("DISPLAY")) or (os.name == "nt") or (sys.platform == "darwin")
-            headless = not has_display
-            log.info(
-                "DOUBAO_HEADLESS=auto: desktop_display=%s -> launch headless=%s",
-                has_display,
-                headless,
-            )
-        else:
-            headless = raw_headless == "true"
-
-        client = BrowserClient(headless=headless, user_data_dir=user_data_dir)
+        client = BrowserClient(headless=False, user_data_dir=user_data_dir)
         await client.start()
         _browser["client"] = client
 
@@ -327,31 +291,9 @@ def create_app(
             log.warning(
                 "Browser not logged in. Visit /auth or scan QR in the opened browser window."
             )
-            raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
-            can_display = bool(os.environ.get("DISPLAY")) if os.name != "nt" else True
-            if client.headless and raw_headless in ("auto", "false") and can_display:
-                log.info("Session not authenticated: switching to visible window for QR login...")
-                await client.switch_mode(headless=False)
 
         # Start browser watchdog
         watchdog_task = asyncio.create_task(_browser_watchdog())
-
-        # Start Qianwen client (optional, enabled via env var)
-        qw_client = None
-        if os.environ.get("QIANWEN_ENABLED", "false").lower() == "true":
-            qw_headless = os.environ.get("QIANWEN_HEADLESS", "true").lower() == "true"
-            qw_data_dir = os.environ.get(
-                "QIANWEN_BROWSER_DATA",
-                os.path.join(os.path.expanduser("~"), ".qianwen_browser"),
-            )
-            qw_client = QianwenClient(headless=qw_headless, user_data_dir=qw_data_dir)
-            try:
-                await qw_client.start()
-                _qianwen["client"] = qw_client
-                log.info("Qianwen client ready")
-            except Exception as e:
-                log.warning("Qianwen client failed to start: %s", e)
-                qw_client = None
 
         # Auto open admin dashboard in default browser
         if os.environ.get("DOUBAO_AUTO_OPEN", "true").lower() == "true":
@@ -372,9 +314,6 @@ def create_app(
         client = _browser.pop("client", None)
         if client:
             await client.stop()
-        qw = _qianwen.pop("client", None)
-        if qw:
-            await qw.stop()
 
     app = FastAPI(title="Doubao API", version="1.0.0", lifespan=lifespan)
 
@@ -427,17 +366,6 @@ def create_app(
                 status_code=503,
                 detail="Not logged in. Visit /auth to scan QR code.",
             )
-        return client
-
-    def _get_qianwen_client() -> QianwenClient:
-        client = _qianwen.get("client")
-        if client is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Qianwen client not available. Set QIANWEN_ENABLED=true.",
-            )
-        if not client.is_ready:
-            raise HTTPException(status_code=503, detail="Qianwen client not ready")
         return client
 
     # ── Prompt extraction ──
@@ -567,9 +495,6 @@ def create_app(
             result["needs_captcha"] = client.needs_captcha
             result["last_error_code"] = client.last_error_code
         result["expert_degraded"] = _expert_tracker.is_degraded
-        # Qianwen status
-        qw = _qianwen.get("client")
-        result["qianwen_ready"] = qw.is_ready if qw else False
         return result
 
     @app.get("/v1/models")
@@ -580,10 +505,6 @@ def create_app(
     @app.post("/v1/chat/completions")
     async def chat_completions(body: ChatCompletionRequest, request: Request):
         _check_auth(request)
-
-        # ── Route to Qianwen if model matches ──
-        if body.model in QIANWEN_MODEL_NAMES:
-            return await _handle_qianwen_chat(body, request)
 
         # ── Tool calling mode ──
         has_tools = bool(body.tools)
@@ -597,7 +518,7 @@ def create_app(
         else:
             use_deep_think = CHAT_MODELS.get(body.model)
             if use_deep_think is None:
-                all_models = list(CHAT_MODELS.keys()) + list(QIANWEN_MODEL_NAMES)
+                all_models = list(CHAT_MODELS.keys())
                 raise HTTPException(
                     status_code=400,
                     detail=f"Unknown model '{body.model}'. Available: {', '.join(all_models)}",
@@ -626,9 +547,9 @@ def create_app(
             else:
                 popped = await client.auto_popup_for_captcha()
                 action_msg = (
-                    "已为您在桌面上自动弹出 Chrome 浏览器窗口，请在窗口中拖拽/点击完成验证码后重试；"
+                    "已为您在桌面上激活并置顶浏览器窗口，请在窗口中拖拽/点击完成验证码后重试；"
                     if popped
-                    else "请在控制台 http://127.0.0.1:9090/admin 点击【切换窗口模式】完成人机验证；"
+                    else "请在控制台 http://127.0.0.1:9090/admin 点击【唤起窗口】完成人机验证；"
                 )
                 raise HTTPException(
                     status_code=503,
@@ -755,317 +676,6 @@ def create_app(
             asyncio.create_task(_delayed_delete(client, message["conversation_id"]))
 
         return JSONResponse(resp_data)
-
-    # ------------------------------------------------------------------
-    # Qianwen chat handler
-    # ------------------------------------------------------------------
-
-    async def _handle_qianwen_chat(body: ChatCompletionRequest, request: Request):
-        """Handle chat completions routed to Qianwen."""
-        qw_client = _get_qianwen_client()
-        model_config = QIANWEN_MODELS.get(body.model, {"model": "Qwen", "deep_search": "0"})
-        qw_model = model_config["model"]
-        deep_search = model_config["deep_search"]
-        # Support enable_thinking parameter (like official API)
-        if body.enable_thinking or (body.reasoning_effort and body.reasoning_effort != "none"):
-            deep_search = "1"
-        # NOTE: tools + thinking mode IS supported — tool output appears in think_content
-        # Do NOT force deep_search="0" when tools are present
-        request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-
-        messages_raw = [m.model_dump(exclude_none=True) for m in body.messages]
-
-        # ── Topic isolation: discard irrelevant history on topic change ──
-        messages_raw = filter_history_by_topic(messages_raw)
-
-        # ── Tool calling: inject tool definitions into prompt ──
-        has_tools = bool(body.tools)
-        if has_tools:
-            # Log input breakdown for debugging
-            num_tools = len(body.tools) if body.tools else 0
-            sys_msg = next((m for m in messages_raw if m.get("role") == "system"), None)
-            sys_len = len(sys_msg.get("content", "")) if sys_msg else 0
-            tool_msgs = [m for m in messages_raw if m.get("role") == "tool"]
-            log.info("Qianwen input: %d msgs, %d tools, sys=%d chars, %d tool_results",
-                     len(messages_raw), num_tools, sys_len, len(tool_msgs))
-
-            # Obfuscate tool names if enabled (avoids Qwen built-in validation)
-            tools_for_prompt = _tool_obfuscator.obfuscate_tools(body.tools)
-            prompt = convert_messages_with_tools(messages_raw, tools_for_prompt)
-            log.info("Qianwen prompt after flatten: %d chars (%dKB)",
-                     len(prompt), len(prompt) // 1024)
-            if len(prompt) > 50000:
-                log.warning("Qianwen prompt OVER LIMIT: %d chars — truncation active", len(prompt))
-            # Wrap as single user message for Qianwen
-            messages_for_qw = [{"role": "user", "content": prompt}]
-        else:
-            messages_for_qw = messages_raw
-
-        if body.stream:
-            return StreamingResponse(
-                _stream_qianwen_chat(
-                    qw_client, messages_for_qw, qw_model, deep_search,
-                    request_id, body.model, has_tools=has_tools,
-                ),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        else:
-            # Non-streaming
-            try:
-                result = await qw_client.chat(messages_for_qw, qw_model, deep_search)
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-            import re as _re
-            _think_prefix_re = _re.compile(r"^\[?\(multimodal_chat_think_\d+\)\]?\s*")
-
-            content = result["content"]
-            think_content = result.get("think_content", "")
-            usage = result.get("usage", {})
-
-            # Strip thinking prefix from content
-            content = _think_prefix_re.sub("", content).strip()
-
-            # Check for tool calls in think_content first, then content
-            if has_tools:
-                source = think_content if think_content else content
-                parsed = parse_tool_calls_xml(source)
-                if not parsed and content:
-                    parsed = parse_tool_calls_xml(content)
-                
-                # Auto-continue if tool call was truncated
-                if not parsed and detect_truncated_tool_call(source or content):
-                    log.info("Detected truncated tool_call, attempting continuation...")
-                    cont_prompt = build_continuation_prompt(source or content)
-                    cont_messages = [{"role": "user", "content": cont_prompt}]
-                    try:
-                        cont_result = await qw_client.chat(cont_messages, qw_model, deep_search)
-                        cont_content = cont_result["content"]
-                        cont_content = _think_prefix_re.sub("", cont_content).strip()
-                        # Deduplicate overlap before combining
-                        combined = deduplicate_continuation(source or content, cont_content)
-                        parsed = parse_tool_calls_xml(combined)
-                        if parsed:
-                            log.info("Continuation successful, got %d tool calls", len(parsed))
-                    except Exception as e:
-                        log.warning("Continuation failed: %s", e)
-                
-                if parsed:
-                    # Deobfuscate tool names back to original
-                    parsed = _tool_obfuscator.deobfuscate_tool_calls(parsed)
-                    # Coerce parameter names to match schema
-                    parsed = coerce_tool_arguments(parsed)
-                    return JSONResponse({
-                        "id": request_id,
-                        "object": "chat.completion",
-                        "created": int(time.time()),
-                        "model": result.get("model", body.model),
-                        "choices": [{
-                            "index": 0,
-                            "message": {
-                                "role": "assistant",
-                                "content": None,
-                                "tool_calls": parsed,
-                            },
-                            "finish_reason": "tool_calls",
-                        }],
-                        "usage": {
-                            "prompt_tokens": usage.get("prompt_tokens", 0),
-                            "completion_tokens": usage.get("completion_tokens", 0),
-                            "total_tokens": usage.get("total_tokens", 0),
-                        },
-                    })
-
-            # Build message with optional reasoning_content
-            message: Dict[str, Any] = {"role": "assistant", "content": content}
-            if think_content and deep_search == "1":
-                message["reasoning_content"] = think_content
-
-            return JSONResponse({
-                "id": request_id,
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": result.get("model", body.model),
-                "choices": [{
-                    "index": 0,
-                    "message": message,
-                    "finish_reason": "stop",
-                }],
-                "usage": {
-                    "prompt_tokens": usage.get("prompt_tokens", 0),
-                    "completion_tokens": usage.get("completion_tokens", 0),
-                    "total_tokens": usage.get("total_tokens", 0),
-                },
-            })
-
-    async def _stream_qianwen_chat(
-        qw_client: QianwenClient,
-        messages: list,
-        model: str,
-        deep_search: str,
-        request_id: str,
-        model_name: str,
-        *,
-        has_tools: bool = False,
-    ):
-        """Generate OpenAI-compatible SSE stream from Qianwen's cumulative format.
-
-        Handles:
-        - Normal content streaming (delta computation from cumulative)
-        - Thinking mode: emits reasoning_content deltas from think_content
-        - Tool calling: detects <tool_call> in content OR think_content
-        """
-        import re as _re
-
-        prev_content = ""
-        prev_think = ""
-        tool_mode = False
-        is_thinking = (deep_search == "1")
-        # Regex to strip [(multimodal_chat_think_N)] prefix
-        _think_prefix_re = _re.compile(r"^\[?\(multimodal_chat_think_\d+\)\]?\s*")
-
-        def _make_chunk(delta: dict, finish_reason=None):
-            return {
-                "id": request_id,
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": model_name,
-                "choices": [{
-                    "index": 0,
-                    "delta": delta,
-                    "finish_reason": finish_reason,
-                }],
-            }
-
-        # First chunk: role
-        chunk = _make_chunk({"role": "assistant", "content": ""})
-        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-
-        full_content = ""
-        full_think = ""
-
-        try:
-            async for event in qw_client.chat_stream(messages, model, deep_search):
-                if event.get("error"):
-                    err_chunk = _make_chunk(
-                        {"content": f"[Error: {event.get('message', 'unknown')}]"}
-                    )
-                    yield f"data: {json.dumps(err_chunk, ensure_ascii=False)}\n\n"
-                    break
-
-                data = event.get("data", {})
-                msgs = data.get("messages", [])
-                for msg in msgs:
-                    if msg.get("mime_type") != "multi_load/iframe":
-                        continue
-                    current = msg.get("content", "")
-                    if not current:
-                        continue
-
-                    # Extract think_content from meta_data if present
-                    think_content = ""
-                    meta = msg.get("meta_data", {})
-                    multi_load = meta.get("multi_load", [])
-                    if multi_load and isinstance(multi_load, list):
-                        ml_content = multi_load[0].get("content", {})
-                        if isinstance(ml_content, dict):
-                            think_content = ml_content.get("think_content", "")
-
-                    # Strip thinking prefix from main content
-                    clean_content = _think_prefix_re.sub("", current).strip()
-                    full_content = clean_content
-
-                    if tool_mode:
-                        # Buffering for tool call completion
-                        full_think = think_content
-                        continue
-
-                    # Check for tool calls in think_content or main content
-                    if has_tools:
-                        check_text = think_content or clean_content
-                        if is_tool_call_start(check_text.strip()):
-                            tool_mode = True
-                            full_think = think_content
-                            continue
-
-                    # Emit reasoning_content delta (thinking mode)
-                    if is_thinking and think_content:
-                        if len(think_content) > len(prev_think):
-                            think_delta = think_content[len(prev_think):]
-                            prev_think = think_content
-                            full_think = think_content
-                            delta_chunk = _make_chunk({
-                                "reasoning_content": think_delta
-                            })
-                            yield f"data: {json.dumps(delta_chunk, ensure_ascii=False)}\n\n"
-
-                    # Emit content delta
-                    if len(clean_content) > len(prev_content):
-                        delta_text = clean_content[len(prev_content):]
-                        prev_content = clean_content
-                        delta_chunk = _make_chunk({"content": delta_text})
-                        yield f"data: {json.dumps(delta_chunk, ensure_ascii=False)}\n\n"
-
-        except Exception as e:
-            log.error("Qianwen stream error: %s", e)
-            err_chunk = _make_chunk({"content": f"[Stream error: {e}]"})
-            yield f"data: {json.dumps(err_chunk, ensure_ascii=False)}\n\n"
-
-        # After stream ends: check for tool calls in both content and think_content
-        if has_tools and (tool_mode or full_think or full_content):
-            # Try think_content first (thinking mode puts tool calls there)
-            source = full_think if full_think else full_content
-            parsed = parse_tool_calls_xml(source)
-            # Also try main content if think didn't have it
-            if not parsed and full_content:
-                parsed = parse_tool_calls_xml(full_content)
-            
-            # Auto-continue if truncated
-            if not parsed and detect_truncated_tool_call(source or full_content):
-                log.info("Stream: detected truncated tool_call, attempting continuation...")
-                cont_prompt = build_continuation_prompt(source or full_content)
-                try:
-                    cont_messages = [{"role": "user", "content": cont_prompt}]
-                    cont_result = await qw_client.chat(cont_messages, model, deep_search)
-                    cont_content = cont_result.get("content", "")
-                    # Deduplicate overlap before combining
-                    combined = deduplicate_continuation(source or full_content, cont_content)
-                    parsed = parse_tool_calls_xml(combined)
-                    if parsed:
-                        log.info("Stream continuation got %d tool calls", len(parsed))
-                except Exception as e:
-                    log.warning("Stream continuation failed: %s", e)
-            
-            if parsed:
-                # Deobfuscate tool names back to original
-                parsed = _tool_obfuscator.deobfuscate_tool_calls(parsed)
-                # Coerce parameter names to match schema
-                parsed = coerce_tool_arguments(parsed)
-                for idx, tc in enumerate(parsed):
-                    tc_delta = {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{
-                            "index": idx,
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["function"]["name"],
-                                "arguments": tc["function"]["arguments"],
-                            },
-                        }],
-                    }
-                    yield f"data: {json.dumps(_make_chunk(tc_delta), ensure_ascii=False)}\n\n"
-                final_chunk = _make_chunk({}, finish_reason="tool_calls")
-                yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-        # Normal finish
-        final_chunk = _make_chunk({}, finish_reason="stop")
-        yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
-        yield "data: [DONE]\n\n"
 
     @app.post("/v1/images/generations")
     async def image_generations(body: ImageGenerationRequest, request: Request):
@@ -1776,20 +1386,11 @@ def create_app(
     @app.get("/admin", response_class=HTMLResponse)
     async def admin_dashboard(request: Request):
         """Serve the admin dashboard (QR login + system + API test + logs)."""
-        novnc_url = os.environ.get("DOUBAO_NOVNC_URL", "").strip()
-        if not novnc_url:
-            scheme = request.url.scheme
-            host = request.url.hostname or "localhost"
-            novnc_url = f"{scheme}://{host}:6080/vnc.html"
-        novnc_password = os.environ.get("DOUBAO_NOVNC_PASSWORD", "").strip()
-        if novnc_password and "password=" not in novnc_url:
-            sep = "&" if "?" in novnc_url else "?"
-            novnc_url = f"{novnc_url}{sep}password={novnc_password}"
         from pathlib import Path
         html_path = Path(__file__).parent / "static" / "admin.html"
         html = html_path.read_text(encoding="utf-8")
         auth_required = "true" if bool(api_key) else "false"
-        content = html.replace("{{NOVNC_URL}}", novnc_url).replace("{{AUTH_REQUIRED}}", auth_required)
+        content = html.replace("{{AUTH_REQUIRED}}", auth_required)
         return HTMLResponse(content=content, status_code=200)
 
     @app.get("/")
@@ -2197,15 +1798,11 @@ def run_server():
     port = int(os.environ.get("DOUBAO_PORT", "9090"))
     api_key = os.environ.get("DOUBAO_API_KEY", "")
     rpm = float(os.environ.get("DOUBAO_RPM_LIMIT", "20"))
-    novnc_url = os.environ.get("DOUBAO_NOVNC_URL", "")
-
     app = create_app(api_key=api_key or None, rpm_limit=rpm)
 
-    print(f"\n  Doubao API Server (Playwright)")
+    print(f"\n  Doubao API Server (Playwright Native)")
     print(f"  Listening on http://{host}:{port}")
     print(f"  Admin page: http://{host}:{port}/admin")
-    if novnc_url:
-        print(f"  noVNC: {novnc_url}")
     if api_key:
         print(f"  API Key: {api_key[:4]}{'*' * (len(api_key) - 4)}")
     print()

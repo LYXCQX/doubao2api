@@ -2154,10 +2154,13 @@ def create_app(
         if client is None:
             raise HTTPException(status_code=503, detail="Browser not initialized")
         try:
-            if client.headless:
-                await client.switch_mode(headless=False)
-            if client.page:
-                await client.page.bring_to_front()
+            # Always ensure an active, visible window
+            await client.switch_mode(headless=False)
+            if client.page and not client.page.is_closed():
+                try:
+                    await client.page.bring_to_front()
+                except Exception:
+                    pass
                 # Click login button if not logged in and modal not open
                 if not client.is_ready:
                     try:

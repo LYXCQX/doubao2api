@@ -280,8 +280,16 @@ class BrowserClient:
 
         # Navigate
         log.info("Navigating to %s", CHAT_URL)
-        await self._page.goto(CHAT_URL, wait_until="load", timeout=60000)
-        await asyncio.sleep(3)
+        try:
+            await self._page.goto(CHAT_URL, wait_until="domcontentloaded", timeout=45000)
+            await asyncio.sleep(2)
+        except Exception as e:
+            log.warning("Navigation to %s warning: %s", CHAT_URL, e)
+            if self._page and not self._page.is_closed():
+                try:
+                    await self._page.goto(CHAT_URL, wait_until="commit", timeout=15000)
+                except Exception:
+                    pass
         try:
             self._user_agent = await self._page.evaluate("() => navigator.userAgent")
             log.info("Detected browser User-Agent: %s", self._user_agent)
@@ -315,6 +323,15 @@ class BrowserClient:
         self._page = None
         self._ready = False
         self._bridge_ready = False
+        # Clean stale browser lock files if any were left behind
+        if self.user_data_dir and os.path.exists(self.user_data_dir):
+            for lock_name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+                lock_file = os.path.join(self.user_data_dir, lock_name)
+                if os.path.exists(lock_file):
+                    try:
+                        os.remove(lock_file)
+                    except Exception:
+                        pass
         log.info("BrowserClient stopped")
 
     async def is_alive(self) -> bool:
@@ -329,8 +346,8 @@ class BrowserClient:
             )
             return result == 2
         except Exception as e:
-            log.warning("Browser health check timeout (busy): %s", e)
-            return True
+            log.warning("Browser health check failed: %s", e)
+            return False
 
     async def restart(self):
         """Stop and restart the browser client."""
@@ -347,10 +364,17 @@ class BrowserClient:
             return False
 
         async with self._mode_lock:
-            if self.headless == headless and self._ready:
-                log.info("Browser mode is already headless=%s", headless)
+            alive = False
+            if self._page and not self._page.is_closed():
+                try:
+                    alive = await self.is_alive()
+                except Exception:
+                    alive = False
+
+            if self.headless == headless and self._ready and alive:
+                log.info("Browser mode is already headless=%s and alive", headless)
                 return True
-            log.info("Switching browser mode: headless=%s -> headless=%s", self.headless, headless)
+            log.info("Switching browser mode: headless=%s -> headless=%s (alive=%s)", self.headless, headless, alive)
             self.headless = headless
             await self.restart()
             return self._ready

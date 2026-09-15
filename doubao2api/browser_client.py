@@ -314,6 +314,9 @@ class BrowserClient:
             "--no-first-run",
             "--no-default-browser-check",
             "--no-sandbox",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
         ]
 
         launch_kwargs = {
@@ -896,6 +899,10 @@ class BrowserClient:
         use_deep_think: int = 0,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Send a chat message and yield SSE events via in-browser fetch."""
+        if not self._page or self._page.is_closed() or not await self.is_alive():
+            log.warning("Browser page is closed or not alive. Auto-recovering browser now...")
+            await self.restart()
+
         if not self._ready:
             raise RuntimeError("Browser not ready - need login first")
 

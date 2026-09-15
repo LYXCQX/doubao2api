@@ -276,7 +276,7 @@ def create_app(
                             client.record_success()
                             client._ready = True
                             raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
-                            if not client.headless and raw_headless in ("auto", "true"):
+                            if not client.headless and raw_headless == "true":
                                 log.info("Captcha resolved. Auto-switching back to background headless mode...")
                                 await client.switch_mode(headless=True)
 
@@ -285,8 +285,8 @@ def create_app(
                         if client.is_ready:
                             log.info("Browser client logged in successfully! sessionid confirmed.")
                             raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
-                            if not client.headless and not client.needs_captcha and raw_headless in ("auto", "true"):
-                                log.info("Auto-switching to background headless mode now...")
+                            if not client.headless and not client.needs_captcha and raw_headless == "true":
+                                log.info("Auto-switching to background headless mode...")
                                 await client.switch_mode(headless=True)
             except Exception as e:
                 log.error("Browser watchdog error: %s", e)
@@ -297,18 +297,21 @@ def create_app(
         logging.getLogger("doubao2api.browser_client").setLevel(logging.INFO)
         logging.getLogger("doubao2api.browser_client").addHandler(logging.StreamHandler())
 
-        # Start browser client (auto: headless if logged in, window if not logged in)
+        # Start browser client (auto: headed window on desktop for stealth, headless on Linux/Docker)
         user_data_dir = os.environ.get(
             "DOUBAO_BROWSER_DATA",
             os.path.join(os.path.expanduser("~"), ".doubao_browser"),
         )
         raw_headless = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
         if raw_headless == "auto":
-            is_logged_in = BrowserClient.is_profile_logged_in(user_data_dir)
-            headless = is_logged_in
+            # On desktop systems (Windows, macOS, or Linux with DISPLAY), default to headed GUI
+            # for maximum anti-risk stealth, real GPU rendering, and instant visual feedback.
+            import sys
+            has_display = bool(os.environ.get("DISPLAY")) or (os.name == "nt") or (sys.platform == "darwin")
+            headless = not has_display
             log.info(
-                "DOUBAO_HEADLESS=auto: profile logged_in=%s -> launch headless=%s",
-                is_logged_in,
+                "DOUBAO_HEADLESS=auto: desktop_display=%s -> launch headless=%s",
+                has_display,
                 headless,
             )
         else:

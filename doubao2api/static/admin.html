@@ -160,11 +160,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
             </button>
           </div>
           <div class="text-lg font-bold text-white flex items-center gap-2">
-            <span>{{browserMode.headless?'👻 静默后台':'🖥️ 桌面窗口'}}</span>
+            <span>{{browserMode.headless?'👻 静默后台 (无头)':'🖥️ 桌面窗口 (有头，抗风控)'}}</span>
             <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700 capitalize">{{browserMode.browserName || 'Chromium'}}</span>
           </div>
           <p class="text-xs text-slate-400 mt-2">
-            {{browserMode.headless?'无弹窗干扰，低内存占用。':'可在前台直接观察操作浏览器。'}}
+            {{browserMode.headless?'无头模式可能在高频并发时触发风控验证码。':'有头模式具备真实显卡与物理屏幕指纹，极不易触发风控。'}}
           </p>
         </div>
 

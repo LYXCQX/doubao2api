@@ -34,6 +34,36 @@ SAMANTHA_COMPLETION_URL = f"{DOUBAO_URL}/samantha/chat/completion"
 DEFAULT_BOT_ID = "7338286299411103781"
 
 
+def bring_window_to_foreground():
+    """Attempt to bring the browser window to the foreground on Windows."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        targets = []
+
+        def _enum_proc(hwnd, lparam):
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    title = buf.value
+                    if any(k in title for k in ("豆包", "Doubao", "doubao.com", "Chrome", "Edge")):
+                        targets.append(hwnd)
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_enum_proc), 0)
+        for hwnd in targets:
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+    except Exception as e:
+        log.debug("bring_window_to_foreground error: %s", e)
+
+
 class BrowserClient:
     """Manages Playwright for login and in-browser fetch for API calls."""
 
@@ -497,36 +527,6 @@ class BrowserClient:
         await asyncio.sleep(2)
         await self.start()
         log.info("BrowserClient restarted. ready=%s", self._ready)
-
-def bring_window_to_foreground():
-    """Attempt to bring the browser window to the foreground on Windows."""
-    if sys.platform != "win32":
-        return
-    try:
-        import ctypes
-        user32 = ctypes.windll.user32
-        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-        targets = []
-
-        def _enum_proc(hwnd, lparam):
-            if user32.IsWindowVisible(hwnd):
-                length = user32.GetWindowTextLengthW(hwnd)
-                if length > 0:
-                    buf = ctypes.create_unicode_buffer(length + 1)
-                    user32.GetWindowTextW(hwnd, buf, length + 1)
-                    title = buf.value
-                    if any(k in title for k in ("豆包", "Doubao", "doubao.com", "Chrome", "Edge")):
-                        targets.append(hwnd)
-            return True
-
-        user32.EnumWindows(WNDENUMPROC(_enum_proc), 0)
-        for hwnd in targets:
-            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-            user32.SetForegroundWindow(hwnd)
-            user32.BringWindowToTop(hwnd)
-    except Exception as e:
-        log.debug("bring_window_to_foreground error: %s", e)
-
 
     async def switch_mode(self, headless: bool = False) -> bool:
         """Ensure browser window is active, healthy, and brought to front (headed mode)."""

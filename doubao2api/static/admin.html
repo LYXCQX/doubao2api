@@ -154,13 +154,14 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
         <!-- Card 2: Browser mode -->
         <div class="metric card">
           <div class="text-xs text-slate-400 mb-1 flex items-center justify-between">
-            <span>运行模式</span>
+            <span>运行内核 / 模式</span>
             <button @click="toggleBrowserMode" :disabled="modeSwitching" class="text-indigo-400 hover:text-indigo-300 text-xs font-normal">
               {{modeSwitching?'切换中...':'[切换]'}}
             </button>
           </div>
           <div class="text-lg font-bold text-white flex items-center gap-2">
             <span>{{browserMode.headless?'👻 静默后台':'🖥️ 桌面窗口'}}</span>
+            <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700 capitalize">{{browserMode.browserName || 'Chromium'}}</span>
           </div>
           <p class="text-xs text-slate-400 mt-2">
             {{browserMode.headless?'无弹窗干扰，低内存占用。':'可在前台直接观察操作浏览器。'}}
@@ -199,7 +200,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
             <h2 class="text-base font-bold text-white flex items-center gap-2">
               <span>🚀 快速登录方式 (支持多电脑/远程/本地)</span>
             </h2>
-            <p class="text-xs text-slate-400 mt-1">支持纯净扫码登录、Cookie 一键导入、弹出 Chrome 窗口或后台截图查看：</p>
+            <p class="text-xs text-slate-400 mt-1">支持纯净扫码登录、Cookie 一键导入、唤起浏览器窗口 (Chrome/Edge) 或后台截图查看：</p>
           </div>
           <button @click="fetchOverview" class="btn-sm">🔄 刷新状态</button>
         </div>
@@ -211,10 +212,10 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
             <span>豆包 App 扫码登录</span>
           </button>
 
-          <!-- Button 2: Force Launch Chrome Window -->
+          <!-- Button 2: Force Launch Browser Window -->
           <button @click="forceWindow" :disabled="windowActionLoading" class="btn py-3.5 text-sm" style="background:linear-gradient(135deg,#3b82f6,#2563eb)">
             <span>🖥️</span>
-            <span>{{windowActionLoading?'正在唤起...':'弹出 / 置顶 Chrome 窗口'}}</span>
+            <span>{{windowActionLoading?'正在唤起...':'唤起 / 置顶浏览器窗口'}}</span>
           </button>
 
           <!-- Button 3: Toggle Live Screenshot -->
@@ -574,7 +575,7 @@ createApp({
 
     const activeTab = ref(0);
     const session = ref(null);
-    const browserMode = reactive({ headless: false, mode: 'window' });
+    const browserMode = reactive({ headless: false, mode: 'window', browserName: 'chromium' });
     const modeSwitching = ref(false);
     const currentTime = ref('');
     const serverInfo = ref({});
@@ -671,6 +672,7 @@ createApp({
         if(d.headless !== undefined){
           browserMode.headless = d.headless;
           browserMode.mode = d.mode || (d.headless ? 'headless' : 'window');
+          if(d.browser_name) browserMode.browserName = d.browser_name;
         }
       }catch(e){
         if(!session.value) session.value = { logged_in: false };
@@ -704,6 +706,7 @@ createApp({
         });
         browserMode.headless = r.headless;
         browserMode.mode = r.mode;
+        if(r.browser_name) browserMode.browserName = r.browser_name;
         await fetchSession();
       }catch(e){
         alert('切换模式失败: ' + e.message);
@@ -719,7 +722,8 @@ createApp({
         if(r.status === 'ok'){
           browserMode.headless = false;
           browserMode.mode = 'window';
-          alert('已请求唤起 Chrome 窗口！若任务栏闪烁请点击激活。');
+          if(r.browser_name) browserMode.browserName = r.browser_name;
+          alert('已请求唤起浏览器窗口！若任务栏闪烁请点击激活。');
         }else{
           alert('唤起窗口提示: ' + (r.detail || '后台正在运行'));
         }

@@ -1974,6 +1974,7 @@ def create_app(
             "headless": client.headless,
             "mode": "headless" if client.headless else "window",
             "needs_captcha": client.needs_captcha,
+            "browser_name": getattr(client, "browser_name", "chromium"),
         }
 
     @app.get("/admin/api/browser/status")
@@ -1997,6 +1998,7 @@ def create_app(
             "headless": client.headless,
             "mode": "headless" if client.headless else "window",
             "logged_in": client.is_ready,
+            "browser_name": getattr(client, "browser_name", "chromium"),
         }
 
     @app.post("/auth/eval")
@@ -2171,7 +2173,7 @@ def create_app(
                                 await btn.first.click()
                     except Exception:
                         pass
-            return {"status": "ok", "mode": "window", "headless": client.headless}
+            return {"status": "ok", "mode": "window", "headless": client.headless, "browser_name": getattr(client, "browser_name", "chromium")}
         except Exception as e:
             log.error("Failed to force window: %s", e)
             return {"status": "error", "detail": str(e)}

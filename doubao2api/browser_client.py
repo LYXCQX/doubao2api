@@ -59,6 +59,11 @@ class BrowserClient:
         self._stream_queues: Dict[str, asyncio.Queue] = {}
         self._bridge_ready: bool = False
         self._user_agent: str = ""
+        self._browser_name: str = "Chromium"
+
+    @property
+    def browser_name(self) -> str:
+        return self._browser_name
 
     @property
     def is_ready(self) -> bool:
@@ -175,6 +180,113 @@ class BrowserClient:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    @classmethod
+    def get_candidate_browsers(cls) -> List[Dict[str, Any]]:
+        """
+        Build a prioritized list of browser launch candidate configurations.
+        Supports:
+          1. Custom env override (DOUBAO_BROWSER_CHANNEL or DOUBAO_BROWSER_BIN)
+          2. Google Chrome (channel="chrome" or system paths)
+          3. Microsoft Edge (channel="msedge" - pre-installed on 100% of modern Windows)
+          4. Brave Browser (via executable path)
+          5. Other Chromium-based browsers (Vivaldi, Opera, 360, etc.)
+          6. Bundled Playwright Chromium (channel=None)
+        """
+        import shutil
+        import sys
+        candidates = []
+
+        # 1. Custom env overrides
+        custom_ch = os.environ.get("DOUBAO_BROWSER_CHANNEL", "").strip().lower()
+        if custom_ch:
+            candidates.append({"channel": custom_ch, "desc": f"自定义通道 ({custom_ch})"})
+
+        custom_bin = os.environ.get("DOUBAO_BROWSER_BIN", "").strip()
+        if custom_bin and os.path.exists(custom_bin):
+            candidates.append({"executable_path": custom_bin, "desc": f"自定义浏览器路径 ({custom_bin})"})
+
+        # 2. OS-specific auto-discovery
+        if os.name == "nt":
+            # Chrome
+            chrome_paths = [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            ]
+            if any(os.path.exists(p) for p in chrome_paths):
+                candidates.append({"channel": "chrome", "desc": "Google Chrome (系统安装)"})
+
+            # Edge (Windows 10/11 保证预装)
+            edge_paths = [
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+            ]
+            if any(os.path.exists(p) for p in edge_paths):
+                candidates.append({"channel": "msedge", "desc": "Microsoft Edge (系统自带)"})
+
+            # Brave
+            brave_paths = [
+                r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+            ]
+            for bp in brave_paths:
+                if os.path.exists(bp):
+                    candidates.append({"executable_path": bp, "desc": f"Brave Browser ({bp})"})
+                    break
+
+            # Other Chromium-based browsers (Vivaldi, Opera)
+            other_paths = [
+                r"C:\Program Files\Vivaldi\Application\vivaldi.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Vivaldi\Application\vivaldi.exe"),
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Opera\launcher.exe"),
+            ]
+            for op in other_paths:
+                if os.path.exists(op):
+                    candidates.append({"executable_path": op, "desc": f"Chromium 内核浏览器 ({op})"})
+                    break
+
+        elif sys.platform == "darwin":
+            # macOS
+            mac_chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            mac_edge = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+            mac_brave = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+            mac_chromium = "/Applications/Chromium.app/Contents/MacOS/Chromium"
+            if os.path.exists(mac_chrome):
+                candidates.append({"channel": "chrome", "desc": "Google Chrome (macOS)"})
+            if os.path.exists(mac_edge):
+                candidates.append({"channel": "msedge", "desc": "Microsoft Edge (macOS)"})
+            if os.path.exists(mac_brave):
+                candidates.append({"executable_path": mac_brave, "desc": "Brave Browser (macOS)"})
+            if os.path.exists(mac_chromium):
+                candidates.append({"executable_path": mac_chromium, "desc": "Chromium (macOS)"})
+
+        else:
+            # Linux
+            for bin_name in ("google-chrome", "google-chrome-stable"):
+                if shutil.which(bin_name):
+                    candidates.append({"channel": "chrome", "desc": f"Google Chrome ({bin_name})"})
+                    break
+            for bin_name in ("microsoft-edge", "microsoft-edge-stable"):
+                if shutil.which(bin_name):
+                    candidates.append({"channel": "msedge", "desc": f"Microsoft Edge ({bin_name})"})
+                    break
+            for bin_name in ("chromium", "chromium-browser", "brave-browser"):
+                p = shutil.which(bin_name)
+                if p:
+                    candidates.append({"executable_path": p, "desc": f"Chromium/Brave ({p})"})
+                    break
+
+        # 3. Bundled Chromium (Playwright native)
+        candidates.append({"desc": "Playwright 内置 Chromium 内核"})
+
+        # 4. Standard channels fallback
+        for ch in ("chrome", "msedge", "chromium"):
+            if not any(c.get("channel") == ch for c in candidates):
+                candidates.append({"channel": ch, "desc": f"系统 '{ch}' 通道"})
+
+        return candidates
+
     async def start(self):
         """Launch browser, navigate to Doubao, init httpx client."""
         # On Linux/Docker without a DISPLAY, enforce headless mode
@@ -184,6 +296,17 @@ class BrowserClient:
                 self.headless = True
 
         log.info("Starting BrowserClient (headless=%s)", self.headless)
+        # Clean stale browser lock files if any were left behind from previous runs
+        if self.user_data_dir and os.path.exists(self.user_data_dir):
+            for lock_name in ("lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"):
+                lock_file = os.path.join(self.user_data_dir, lock_name)
+                if os.path.exists(lock_file):
+                    try:
+                        os.remove(lock_file)
+                        log.info("Cleaned stale profile lock: %s", lock_file)
+                    except Exception as e:
+                        log.debug("Could not remove lock %s: %s", lock_file, e)
+
         self._playwright = await async_playwright().start()
 
         launch_args = [
@@ -193,54 +316,48 @@ class BrowserClient:
             "--no-sandbox",
         ]
 
-        # Prefer bundled Chromium to prevent collisions with user's existing Chrome processes
-        chrome_channel = None
-        if os.environ.get("DOUBAO_USE_SYSTEM_CHROME", "false").lower() == "true":
-            import shutil
-            if os.name == "nt":
-                chrome_paths = [
-                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-                    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-                ]
-                if any(os.path.exists(p) for p in chrome_paths):
-                    chrome_channel = "chrome"
-            elif os.name == "posix":
-                import sys
-                if sys.platform == "darwin":
-                    mac_paths = [
-                        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-                    ]
-                    if any(os.path.exists(p) for p in mac_paths):
-                        chrome_channel = "chrome"
-                else:
-                    for bin_name in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
-                        if shutil.which(bin_name):
-                            chrome_channel = "chrome"
-                            break
-
         launch_kwargs = {
             "headless": self.headless,
             "args": launch_args,
             "viewport": {"width": 1280, "height": 720},
             "locale": "zh-CN",
         }
-        if chrome_channel:
-            launch_kwargs["channel"] = chrome_channel
 
-        async def _launch_context(kwargs):
+        async def _launch_context(extra_kwargs):
+            kw = dict(launch_kwargs)
+            kw.update(extra_kwargs)
             if self.user_data_dir:
-                ctx = await self._playwright.chromium.launch_persistent_context(
-                    self.user_data_dir,
-                    **kwargs
-                )
+                try:
+                    ctx = await self._playwright.chromium.launch_persistent_context(
+                        self.user_data_dir,
+                        **kw
+                    )
+                except Exception as e:
+                    err_str = str(e)
+                    if "ProcessSingleton" in err_str or "Lock file" in err_str or "lockfile" in err_str:
+                        log.warning("Detected lock collision during launch, retrying after clearing lockfile...")
+                        await asyncio.sleep(1.0)
+                        for lock_name in ("lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"):
+                            lp = os.path.join(self.user_data_dir, lock_name)
+                            if os.path.exists(lp):
+                                try:
+                                    os.remove(lp)
+                                except Exception:
+                                    pass
+                        ctx = await self._playwright.chromium.launch_persistent_context(
+                            self.user_data_dir,
+                            **kw
+                        )
+                    else:
+                        raise
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 return ctx, page
             else:
                 b_kwargs = {"headless": self.headless, "args": launch_args}
-                if kwargs.get("channel"):
-                    b_kwargs["channel"] = kwargs["channel"]
+                if kw.get("channel"):
+                    b_kwargs["channel"] = kw["channel"]
+                if kw.get("executable_path"):
+                    b_kwargs["executable_path"] = kw["executable_path"]
                 browser = await self._playwright.chromium.launch(**b_kwargs)
                 ctx = await browser.new_context(
                     viewport={"width": 1280, "height": 720}, locale="zh-CN",
@@ -248,28 +365,57 @@ class BrowserClient:
                 page = await ctx.new_page()
                 return ctx, page
 
-        try:
-            self._context, self._page = await _launch_context(launch_kwargs)
-        except Exception as e:
-            err_msg = str(e)
-            if "Executable doesn't exist" in err_msg:
-                fallback_success = False
-                for fallback_channel in ("chrome", "msedge", "chromium"):
-                    try:
-                        log.info("Bundled Chromium not installed. Attempting fallback to system '%s'...", fallback_channel)
-                        kw = dict(launch_kwargs)
-                        kw["channel"] = fallback_channel
-                        self._context, self._page = await _launch_context(kw)
-                        log.info("Successfully launched browser using '%s' channel!", fallback_channel)
-                        fallback_success = True
-                        break
-                    except Exception as fe:
-                        log.debug("Fallback channel '%s' unavailable: %s", fallback_channel, fe)
-                if not fallback_success:
-                    log.error("No compatible browser found. Please run: playwright install chromium")
-                    raise RuntimeError("Playwright Chromium browser not found. Run 'playwright install chromium' to install.") from e
-            else:
-                raise
+        candidates = self.get_candidate_browsers()
+        launched = False
+        last_error = None
+
+        for cand in candidates:
+            cand_desc = cand.get("desc", "unknown")
+            extra = {}
+            if "channel" in cand:
+                extra["channel"] = cand["channel"]
+            if "executable_path" in cand:
+                extra["executable_path"] = cand["executable_path"]
+
+            try:
+                log.info("尝试启动浏览器: %s (headless=%s) ...", cand_desc, self.headless)
+                self._context, self._page = await _launch_context(extra)
+                self._browser_name = cand_desc
+                log.info("成功启动浏览器: %s (headless=%s)", cand_desc, self.headless)
+                launched = True
+                break
+            except Exception as e:
+                last_error = e
+                log.debug("启动浏览器 %s 失败: %s", cand_desc, e)
+
+        # If all candidates failed, attempt auto-install of Playwright Chromium
+        if not launched:
+            log.warning("未检测到可用的系统浏览器，正在自动下载并安装 Playwright Chromium 内核...")
+            try:
+                import subprocess, sys
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                if proc.returncode == 0:
+                    log.info("Playwright Chromium 内核安装成功，正在重新启动...")
+                    self._context, self._page = await _launch_context({})
+                    self._browser_name = "Playwright 内置 Chromium (自动安装)"
+                    launched = True
+                else:
+                    log.error("自动安装 Playwright Chromium 失败: %s", proc.stderr)
+            except Exception as ie:
+                log.error("自动安装 Playwright Chromium 异常: %s", ie)
+
+        if not launched:
+            log.error("未找到任何可用的 Chromium 内核浏览器 (已尝试 Chrome, Edge, Brave, Chromium)。")
+            raise RuntimeError(
+                "未检测到可用的浏览器。本项目支持 Google Chrome、Microsoft Edge、Brave 或系统 Chromium。"
+                "请安装 Chrome 或 Edge，或在终端执行: playwright install chromium"
+            ) from last_error
 
         # Stealth patches
         stealth = Stealth(navigator_languages_override=("zh-CN", "zh"))
@@ -325,7 +471,7 @@ class BrowserClient:
         self._bridge_ready = False
         # Clean stale browser lock files if any were left behind
         if self.user_data_dir and os.path.exists(self.user_data_dir):
-            for lock_name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+            for lock_name in ("lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"):
                 lock_file = os.path.join(self.user_data_dir, lock_name)
                 if os.path.exists(lock_file):
                     try:

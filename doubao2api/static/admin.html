@@ -403,7 +403,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
 
         <div v-show="showAdvanced" class="p-4 border-t border-slate-800/80 space-y-4 bg-surface-900/80 text-xs">
           <!-- 包含之前的浏览器环境卡片与底层操作 -->
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div class="p-3 bg-surface-800 rounded-lg border border-slate-700">
               <div class="text-slate-400 mb-1">浏览器底层引擎</div>
               <div class="font-bold text-white flex items-center gap-2">
@@ -423,6 +423,15 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
                 </button>
               </div>
               <p class="text-[11px] text-slate-500 mt-1">可将后台浏览器呼出到前台，或在控制台直接查看渲染画面。</p>
+            </div>
+            <div class="p-3 bg-surface-800 rounded-lg border border-slate-700">
+              <div class="text-slate-400 mb-1">通用独立浏览器</div>
+              <div class="mt-1">
+                <button @click="installChromium" :disabled="installingChromium" class="btn-sm text-xs border border-indigo-700 text-indigo-300 hover:text-white">
+                  {{installingChromium?'正在下载安装...':'📥 安装通用 Chromium'}}
+                </button>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">Playwright 官方独立免安装 Chromium，不依赖电脑 Chrome。</p>
             </div>
             <div class="p-3 bg-surface-800 rounded-lg border border-slate-700">
               <div class="text-slate-400 mb-1">风控拦截重置</div>
@@ -965,6 +974,21 @@ createApp({
       }
     }
 
+    const installingChromium = ref(false);
+    async function installChromium(){
+      if(!confirm('是否在后台自动下载并安装通用的 Playwright Chromium 独立浏览器？（约需 1~2 分钟）')) return;
+      installingChromium.value = true;
+      try{
+        const r = await api('/admin/api/browser/install-chromium', { method: 'POST' });
+        alert(r.message || '安装完成！');
+        await fetchSession();
+      }catch(e){
+        alert('安装失败: ' + e.message);
+      }finally{
+        installingChromium.value = false;
+      }
+    }
+
     async function fetchLogs(){
       try{
         const l = await api('/admin/api/logs');
@@ -1092,7 +1116,8 @@ createApp({
       showQrModal, qrState, qrStatusColor, toggleQrModal, startQrLogin,
       logs, test,
       fetchOverview, fetchSystem, openDoubaoWeb, toggleBrowserMode, forceWindow,
-      toggleScreenshot, refreshScreenshot, submitCookie, fetchLogs, runTest, resetCaptcha
+      toggleScreenshot, refreshScreenshot, submitCookie, fetchLogs, runTest, resetCaptcha,
+      installChromium, installingChromium
     };
   }
 }).mount('#app');

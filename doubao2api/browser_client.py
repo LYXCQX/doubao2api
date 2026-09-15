@@ -234,6 +234,16 @@ class BrowserClient:
 
         # 2. OS-specific auto-discovery
         if os.name == "nt":
+            # Playwright Universal Standalone Chromium (完全独立、免安装、不与系统Chrome冲突)
+            base_dir = os.path.expandvars(r"%LOCALAPPDATA%\ms-playwright")
+            if os.path.exists(base_dir):
+                for item in sorted(os.listdir(base_dir), reverse=True):
+                    if item.startswith("chromium-") and "headless" not in item:
+                        exe = os.path.join(base_dir, item, "chrome-win", "chrome.exe")
+                        if os.path.exists(exe):
+                            candidates.append({"executable_path": exe, "desc": f"Playwright 通用独立 Chromium ({item})"})
+                            break
+
             # Chrome
             chrome_paths = [
                 r"C:\Program Files\Google\Chrome\Application\chrome.exe",

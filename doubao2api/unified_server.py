@@ -1796,6 +1796,25 @@ def create_app(
             log.error("Failed to force window: %s", e)
             return {"status": "error", "detail": str(e)}
 
+    @app.post("/admin/api/browser/install-chromium")
+    async def admin_install_chromium(request: Request):
+        """Download and install official Playwright universal Chromium browser."""
+        import subprocess, sys
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if proc.returncode == 0:
+                return {"status": "ok", "message": "Playwright 通用独立 Chromium 安装成功！"}
+            else:
+                return {"status": "error", "message": proc.stderr or "安装失败"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     return app
 
 

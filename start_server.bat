@@ -61,7 +61,7 @@ echo [提示] 正在启动服务...
 echo [提示] 启动成功后将在 3 秒内自动在默认浏览器中打开管理后台页面...
 echo.
 
-set DOUBAO_HEADLESS=auto
+set DOUBAO_HEADLESS=false
 set DOUBAO_AUTO_OPEN=true
 set DOUBAO_AUTO_DELETE_CONV=true
 

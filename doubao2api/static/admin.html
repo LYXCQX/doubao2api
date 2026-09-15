@@ -118,7 +118,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
 
   <div class="p-8 max-w-6xl mx-auto space-y-6">
 
-    <!-- TAB 0: 状态与快速登录 -->
+    <!-- TAB 0: 3 步使用向导与状态 -->
     <section v-show="activeTab===0" class="space-y-6">
 
       <!-- Captcha Alert Banner if needs_captcha is True -->
@@ -135,100 +135,100 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
         </button>
       </div>
 
-      <!-- Status Metric Cards -->
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <!-- Card 1: Auth status -->
-        <div class="metric card card-glow">
-          <div class="text-xs text-slate-400 mb-1">会话授权状态</div>
-          <div class="flex items-center gap-2">
-            <span :class="['w-3 h-3 rounded-full',session&&session.logged_in?'bg-emerald-400 pulse':'bg-rose-400']"></span>
-            <span class="text-lg font-bold" :class="session&&session.logged_in?'text-emerald-400':'text-rose-400'">
-              {{session&&session.logged_in?'已授权就绪':'未登录凭证'}}
-            </span>
+      <!-- Main Status Banner -->
+      <div class="card p-5 border flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+           :class="session&&session.logged_in ? 'border-emerald-500/40 bg-emerald-950/20' : 'border-amber-500/40 bg-amber-950/20'">
+        <div class="flex items-center gap-3.5">
+          <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
+               :class="session&&session.logged_in ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'">
+            {{session&&session.logged_in ? '✓' : '!'}}
           </div>
-          <p class="text-xs text-slate-400 mt-2">
-            {{session&&session.logged_in?'Session 有效，各客户端均可请求。':'请使用下方任一方式完成登录。'}}
-          </p>
+          <div>
+            <div class="text-base font-bold flex items-center gap-2"
+                 :class="session&&session.logged_in ? 'text-emerald-300' : 'text-amber-300'">
+              <span>{{session&&session.logged_in ? '服务状态：已授权就绪' : '服务状态：等待登录授权'}}</span>
+              <span class="text-xs px-2.5 py-0.5 rounded-full font-mono font-normal"
+                    :class="session&&session.logged_in ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700/50' : 'bg-amber-900/60 text-amber-300 border border-amber-700/50'">
+                {{session&&session.logged_in ? '就绪可请求' : '未登录'}}
+              </span>
+            </div>
+            <p class="text-xs text-slate-400 mt-1">
+              {{session&&session.logged_in ? '当前会话凭证正常，OpenAI 兼容接口及各第三方客户端均可畅通调用。' : '请根据下方【步骤 1】在您当前使用的浏览器中登录并导入 Cookie，即可秒速激活。'}}
+            </p>
+          </div>
         </div>
-
-        <!-- Card 2: Browser Engine Status -->
-        <div class="metric card">
-          <div class="text-xs text-slate-400 mb-1 flex items-center justify-between">
-            <span>浏览器环境 (全时有头窗口)</span>
-            <button @click="forceWindow" :disabled="windowActionLoading" class="text-indigo-400 hover:text-indigo-300 text-xs font-normal">
-              {{windowActionLoading?'置顶中...':'[前台置顶]'}}
-            </button>
-          </div>
-          <div class="text-lg font-bold text-white flex items-center gap-2">
-            <span>🖥️ 原生桌面窗口</span>
-            <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700 capitalize">{{browserMode.browserName || 'Chrome/Edge'}}</span>
-          </div>
-          <p class="text-xs text-slate-400 mt-2">
-            独占物理显卡 GPU 与真实环境指纹，免疫无头风控。可随时最小化到任务栏。
-          </p>
-        </div>
-
-        <!-- Card 3: API Endpoint (Dynamic) -->
-        <div class="metric card">
-          <div class="text-xs text-slate-400 mb-1 flex items-center justify-between">
-            <span>服务接入点 (Base URL)</span>
-            <button @click="copyText(apiBaseUrl, 'API Base URL 已复制!')" class="text-indigo-400 hover:text-indigo-300 text-xs font-normal">复制</button>
-          </div>
-          <div class="text-sm font-mono font-bold text-brand-300 truncate" :title="apiBaseUrl">{{apiBaseUrl}}</div>
-          <p class="text-xs text-slate-400 mt-2">OpenAI 兼容端点: <code class="text-slate-300 font-mono">/v1</code></p>
-        </div>
-
-        <!-- Card 4: Auth Key Protection -->
-        <div class="metric card">
-          <div class="text-xs text-slate-400 mb-1 flex items-center justify-between">
-            <span>API 密钥鉴权</span>
-            <button @click="showKeyModal=true" class="text-indigo-400 hover:text-indigo-300 text-xs font-normal">修改</button>
-          </div>
-          <div class="text-base font-bold truncate" :class="apiKey?'text-emerald-400 font-mono':'text-slate-400'">
-            {{apiKey ? (apiKey.slice(0,6)+'***'+apiKey.slice(-3)) : '未启用鉴权'}}
-          </div>
-          <p class="text-xs text-slate-400 mt-2">
-            {{apiKey ? '请求必须附带 Authorization 头' : '任何客户端均可直接访问接入'}}
-          </p>
+        <div class="flex items-center gap-2 shrink-0">
+          <button @click="fetchOverview" class="btn btn-sm btn-outline border-slate-700 text-slate-300 hover:text-white">
+            🔄 刷新状态
+          </button>
         </div>
       </div>
 
-      <!-- Quick Login Actions Card -->
+      <!-- STEP 1: 账号登录与凭证授权 (路径 B 主推) -->
       <div class="card card-glow border border-indigo-500/30 space-y-4">
-        <div class="flex items-center justify-between">
-          <div>
-            <h2 class="text-base font-bold text-white flex items-center gap-2">
-              <span>🚀 快速登录方式 (支持多电脑/远程/本地)</span>
-            </h2>
-            <p class="text-xs text-slate-400 mt-1">支持纯净扫码登录、Cookie 一键导入、唤起浏览器窗口 (Chrome/Edge) 或后台截图查看：</p>
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div class="flex items-center gap-2.5">
+            <span class="w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">1</span>
+            <h2 class="text-sm font-bold text-white">账号登录与凭证授权（主推路径 B：在当前浏览器中登录）</h2>
           </div>
-          <button @click="fetchOverview" class="btn-sm">🔄 刷新状态</button>
+          <span class="text-xs text-slate-400">最稳妥、免风控干扰、持久有效</span>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
-          <!-- Button 1: App QR Login -->
-          <button @click="toggleQrModal" class="btn py-3.5 text-sm" style="background:linear-gradient(135deg,#8b5cf6,#6366f1)">
-            <span>📱</span>
-            <span>豆包 App 扫码登录</span>
-          </button>
+        <!-- 路径 B 核心流程：打开登录 + Cookie 激活 -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <!-- 左侧：一键在日常浏览器打开 -->
+          <div class="lg:col-span-5 p-4 rounded-xl bg-surface-800/80 border border-slate-700/80 space-y-3 flex flex-col justify-between">
+            <div class="space-y-2">
+              <div class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <span>🌐</span> 第一小步：在当前浏览器中登录
+              </div>
+              <p class="text-xs text-slate-400 leading-relaxed">
+                点击下方按钮，直接在您当前正在使用的浏览器（Edge/Chrome）新标签页中打开豆包官网并登录：
+              </p>
+            </div>
+            <button @click="openDoubaoWeb" class="btn btn-primary w-full py-2.5 text-xs font-semibold flex items-center justify-center gap-2 shadow-lg">
+              <span>🚀</span>
+              <span>在当前浏览器打开豆包官网</span>
+            </button>
+            <div class="text-[11px] text-slate-500 pt-1 border-t border-slate-700/50">
+              💡 网页端支持手机验证码、微信或抖音扫码登录，几秒即可完成。
+            </div>
+          </div>
 
-          <!-- Button 2: Force Launch Browser Window -->
-          <button @click="forceWindow" :disabled="windowActionLoading" class="btn py-3.5 text-sm" style="background:linear-gradient(135deg,#3b82f6,#2563eb)">
-            <span>🖥️</span>
-            <span>{{windowActionLoading?'正在唤起...':'唤起 / 置顶浏览器窗口'}}</span>
-          </button>
+          <!-- 右侧：Cookie 复制与粘贴激活 -->
+          <div class="lg:col-span-7 p-4 rounded-xl bg-surface-800/80 border border-slate-700/80 space-y-3">
+            <div class="text-xs font-bold text-slate-200 flex items-center justify-between">
+              <span class="flex items-center gap-1.5"><span>📥</span> 第二小步：复制 Cookie 粘贴激活</span>
+              <span class="text-indigo-400 text-xs font-normal">极速 5 秒搞定</span>
+            </div>
+            <div class="text-xs text-slate-300 space-y-1 bg-surface-900/80 p-2.5 rounded-lg border border-slate-700/50 font-mono">
+              <div>1. 在刚登录的豆包网页按 <kbd class="px-1.5 py-0.5 rounded bg-slate-700 font-mono text-slate-200">F12</kbd> 打开控制台；</div>
+              <div>2. 切换到 <span class="text-indigo-300 font-semibold">Console (控制台)</span>，输入 <code class="text-emerald-400 font-bold select-all">copy(document.cookie)</code> 回车；</div>
+              <div>3. 粘贴到下方文本框，点击【确认导入并激活】（亦可直接粘贴 sessionid）。</div>
+            </div>
+            <div class="flex gap-2">
+              <input v-model="cookieInput" type="text" class="flex-1 text-xs font-mono" placeholder="粘贴 Cookie 字符串（或直接粘贴 sessionid 的值）..." />
+              <button @click="submitCookie" :disabled="cookieLoading||!cookieInput.trim()" class="btn btn-success text-xs font-semibold px-4 shrink-0">
+                {{cookieLoading?'正在激活...':'确认导入并激活'}}
+              </button>
+            </div>
+            <div v-if="cookieMessage" class="text-xs font-semibold" :class="cookieMessage.includes('成功')?'text-emerald-400':'text-rose-400'">
+              {{cookieMessage}}
+            </div>
+          </div>
+        </div>
 
-          <!-- Button 3: Toggle Live Screenshot -->
-          <button @click="toggleScreenshot" class="btn btn-sm py-3.5 text-sm" style="background:#334155">
-            <span>📷</span>
-            <span>{{showScreenshot?'收起浏览器截图':'查看后台实时画面'}}</span>
-          </button>
-
-          <!-- Button 4: Open in Default Browser -->
-          <button @click="openDoubaoWeb" class="btn btn-sm py-3.5 text-sm border border-slate-600 bg-surface-900/60">
-            <span>🌐</span>
-            <span>在系统浏览器中打开</span>
-          </button>
+        <!-- 备用登录选项 -->
+        <div class="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+          <span>其他登录途径（备选）：</span>
+          <div class="flex items-center gap-2">
+            <button @click="forceWindow" :disabled="windowActionLoading" class="btn-sm text-xs border border-slate-700 text-slate-300 hover:text-white">
+              🖥️ {{windowActionLoading?'正在打开...':'打开独立桌面浏览器窗口'}}
+            </button>
+            <button @click="toggleQrModal" class="btn-sm text-xs border border-indigo-700 text-indigo-300 hover:text-white">
+              📱 {{showQrModal?'收起扫码框':'手机 App 纯净扫码登录'}}
+            </button>
+          </div>
         </div>
 
         <!-- Inline QR Login Viewer (Pure HTTP QR) -->
@@ -258,76 +258,195 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
               <div class="font-bold text-sm" :class="qrStatusColor">{{qrState.statusText}}</div>
               <p class="text-slate-400">1. 打开手机端【豆包 App】或微信/抖音扫一扫；</p>
               <p class="text-slate-400">2. 扫描左侧二维码并在手机上点击确认授权；</p>
-              <p class="text-slate-400">3. 确认后系统将自动提取会话并同步至 Playwright，无需任何手动配置！</p>
+              <p class="text-slate-400">3. 确认后系统将自动提取会话并同步，无需任何手动配置！</p>
               <div v-if="qrState.status==='success'" class="p-2.5 rounded-lg bg-emerald-950/60 border border-emerald-800 text-emerald-300 font-semibold">
                 🎉 登录成功！会话已自动就绪，您现在可以随时调用 API 了！
               </div>
             </div>
           </div>
         </div>
-
-        <!-- Inline Screenshot Viewer -->
-        <div v-if="showScreenshot" class="p-4 rounded-xl bg-slate-900/90 border border-slate-700">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-xs text-slate-300 font-medium">后台浏览器实时画面（若弹出了图形验证码或登录框可在此查看）：</span>
-            <button @click="refreshScreenshot" :disabled="screenshot.loading" class="btn-sm text-xs">
-              {{screenshot.loading?'截图中...':'🔄 刷新画面'}}
-            </button>
-          </div>
-          <div v-if="screenshot.img" class="flex flex-col items-center">
-            <img :src="screenshot.img" class="max-h-96 rounded-lg border border-slate-700 shadow-xl" />
-            <span class="text-xs text-slate-500 mt-2 font-mono">截取时间: {{screenshot.time}}</span>
-          </div>
-          <div v-else class="py-8 text-center text-xs text-slate-500">正在加载画面...</div>
-        </div>
       </div>
 
-      <!-- Quick Cookie Import Card -->
-      <div class="card border border-slate-700 bg-surface-900/40">
-        <div class="flex items-center justify-between mb-3">
-          <div>
-            <h3 class="text-sm font-bold text-white flex items-center gap-2">
-              <span>📥 一键导入已登录 Cookie（最稳妥、免扫码）</span>
-            </h3>
-            <p class="text-xs text-slate-400 mt-1">如果您已经在其他电脑或日常的 Edge/Chrome 中登录了豆包，只需 5 秒即可导入：</p>
+      <!-- STEP 2: 获取服务地址与客户端配置 -->
+      <div class="card border border-slate-700 space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div class="flex items-center gap-2.5">
+            <span class="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-bold flex items-center justify-center">2</span>
+            <h2 class="text-sm font-bold text-white">获取 API 服务地址并配置到客户端</h2>
           </div>
+          <span class="text-xs text-slate-400">OpenAI 格式标准兼容</span>
         </div>
 
-        <div class="p-3 mb-3 rounded-lg bg-surface-800/80 border border-slate-700 text-xs text-slate-300 space-y-1">
-          <div>1. 在任意电脑已登录的豆包网页（doubao.com/chat）按 <kbd class="px-1.5 py-0.5 rounded bg-slate-700 font-mono text-slate-200">F12</kbd> 打开控制台；</div>
-          <div>2. 切换到 <span class="text-indigo-300 font-semibold">Console (控制台)</span>，输入 <code class="text-emerald-400 font-mono font-bold select-all">copy(document.cookie)</code> 并按回车；</div>
-          <div>3. 粘贴到下方文本框，点击【确认导入并激活】即可立即激活会话！</div>
-        </div>
-
-        <div class="flex gap-2">
-          <input v-model="cookieInput" type="text" class="flex-1 text-xs font-mono" placeholder="粘贴 Cookie 字符串（或直接粘贴 sessionid 的值）..." />
-          <button @click="submitCookie" :disabled="cookieLoading||!cookieInput.trim()" class="btn btn-success text-xs font-semibold px-5 shrink-0">
-            {{cookieLoading?'正在激活...':'确认导入并激活'}}
-          </button>
-        </div>
-        <div v-if="cookieMessage" class="mt-2 text-xs font-semibold" :class="cookieMessage.includes('成功')?'text-emerald-400':'text-rose-400'">
-          {{cookieMessage}}
-        </div>
-      </div>
-
-      <!-- Client Configuration Info -->
-      <div class="card border border-slate-700 bg-surface-900/40">
-        <h3 class="text-sm font-bold text-slate-200 mb-2">🔌 客户端接入配置 (OpenAI 兼容)</h3>
-        <p class="text-xs text-slate-400 mb-3">可在 Cherry Studio、Chatbox、NextChat、Cursor、沉浸式翻译等任意软件中使用：</p>
-        <div class="grid md:grid-cols-2 gap-3 text-xs">
-          <div class="p-3 bg-surface-800 rounded-lg border border-slate-700 flex items-center justify-between">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div class="p-3.5 bg-surface-800 rounded-xl border border-slate-700 flex items-center justify-between">
             <div>
-              <span class="text-slate-400 block mb-1">API Base URL:</span>
+              <span class="text-slate-400 text-xs block mb-1 font-medium">接口地址 (Base URL):</span>
               <code class="font-mono text-indigo-300 font-bold select-all text-sm">{{apiBaseUrl}}</code>
             </div>
             <button @click="copyText(apiBaseUrl, '已复制 Base URL!')" class="btn-sm text-xs">复制</button>
           </div>
-          <div class="p-3 bg-surface-800 rounded-lg border border-slate-700 flex items-center justify-between">
+          <div class="p-3.5 bg-surface-800 rounded-xl border border-slate-700 flex items-center justify-between">
             <div>
-              <span class="text-slate-400 block mb-1">API Key:</span>
-              <code class="font-mono text-emerald-400 font-bold select-all text-sm">{{apiKey || 'sk-doubao (或任意字符)'}}</code>
+              <span class="text-slate-400 text-xs block mb-1 font-medium">API Key (密钥):</span>
+              <code class="font-mono text-emerald-400 font-bold select-all text-sm">{{apiKey || 'sk-doubao (无需密钥或任意字符)'}}</code>
             </div>
-            <button @click="copyText(apiKey || 'sk-doubao', '已复制 API Key!')" class="btn-sm text-xs">复制</button>
+            <div class="flex items-center gap-1.5">
+              <button @click="copyText(apiKey || 'sk-doubao', '已复制 API Key!')" class="btn-sm text-xs">复制</button>
+              <button @click="showKeyModal=true" class="btn-sm text-xs text-slate-400 hover:text-white">修改</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 常用模型速查与客户端提示 -->
+        <div class="p-3 rounded-lg bg-surface-900/60 border border-slate-800 text-xs space-y-2">
+          <div class="text-slate-300 font-semibold flex items-center gap-1.5">
+            <span>💡</span> 常用模型推荐填入：
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-slate-400 font-mono">
+            <div class="p-2.5 rounded bg-surface-800 border border-slate-700/60">
+              <div class="text-white font-bold">doubao-2.1-turbo</div>
+              <div class="text-[11px] text-slate-400 font-sans mt-0.5">极速推荐，日常对话</div>
+            </div>
+            <div class="p-2.5 rounded bg-surface-800 border border-slate-700/60">
+              <div class="text-indigo-300 font-bold">doubao-think</div>
+              <div class="text-[11px] text-slate-400 font-sans mt-0.5">深度思考，强逻辑推理</div>
+            </div>
+            <div class="p-2.5 rounded bg-surface-800 border border-slate-700/60">
+              <div class="text-emerald-300 font-bold">doubao-2.1-pro</div>
+              <div class="text-[11px] text-slate-400 font-sans mt-0.5">专业版，代码创作</div>
+            </div>
+            <div class="p-2.5 rounded bg-surface-800 border border-slate-700/60">
+              <div class="text-amber-300 font-bold">doubao-expert</div>
+              <div class="text-[11px] text-slate-400 font-sans mt-0.5">专家模式，高阶问答</div>
+            </div>
+          </div>
+          <p class="text-slate-500 text-[11px] pt-1">
+            * 完美支持 Cherry Studio、Chatbox、NextChat、Cursor、沉浸式翻译、LobeChat 等所有支持 OpenAI 接口的工具。
+          </p>
+        </div>
+      </div>
+
+      <!-- STEP 3: 在线快速测试与连通性验证 -->
+      <div class="card border border-slate-700 space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div class="flex items-center gap-2.5">
+            <span class="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">3</span>
+            <h2 class="text-sm font-bold text-white">在线快速测试与连通性验证</h2>
+          </div>
+          <span class="text-xs text-slate-400">即测即用，实时打字机流式验证</span>
+        </div>
+
+        <div class="space-y-3">
+          <div class="flex flex-col sm:flex-row gap-3">
+            <div class="w-full sm:w-60 shrink-0">
+              <label class="text-xs text-slate-400 block mb-1">测试模型</label>
+              <select v-model="test.model" class="w-full text-xs">
+                <option value="doubao-2.1-turbo">doubao-2.1-turbo (极速响应，推荐)</option>
+                <option value="doubao-think">doubao-think (深度思考链)</option>
+                <option value="doubao-2.1-pro">doubao-2.1-pro (2.1 专业版)</option>
+                <option value="doubao-2.1">doubao-2.1 (2.1 标准版)</option>
+                <option value="doubao-expert">doubao-expert (专家模式)</option>
+              </select>
+            </div>
+            <div class="flex-1">
+              <label class="text-xs text-slate-400 block mb-1">输入测试提示词 (Prompt)</label>
+              <div class="flex gap-2">
+                <input v-model="test.prompt" @keyup.enter="runTest" type="text" class="flex-1 text-xs" placeholder="输入测试问题..." />
+                <button @click="runTest" :disabled="test.loading||!test.prompt.trim()" class="btn btn-primary text-xs px-5 font-semibold shrink-0">
+                  {{test.loading?'正在生成...':'🚀 发送测试'}}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 测试输出区域 -->
+          <div v-if="test.output || test.thinking || test.error || test.loading" class="mt-3 p-4 rounded-xl bg-surface-900 border border-slate-700/80 space-y-2.5">
+            <div class="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-2">
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-white font-mono">{{test.model}}</span>
+                <span v-if="test.ms" class="text-indigo-400 font-mono">耗时 {{test.ms}}ms</span>
+              </div>
+              <span v-if="test.loading" class="text-emerald-400 animate-pulse font-mono">● 正在流式生成中...</span>
+              <span v-else-if="test.output" class="text-emerald-400">✓ 生成完毕</span>
+            </div>
+
+            <!-- 深度思考内容 (如果存在) -->
+            <div v-if="test.thinking" class="p-3 rounded-lg bg-indigo-950/30 border border-indigo-800/40 text-xs text-indigo-300">
+              <div class="font-bold mb-1 flex items-center gap-1.5">
+                <span>🧠</span> 深度思考过程 (Reasoning):
+              </div>
+              <div class="font-mono whitespace-pre-wrap leading-relaxed opacity-90 text-[11px]">{{test.thinking}}</div>
+            </div>
+
+            <!-- 正文输出 -->
+            <div v-if="test.output" class="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap font-sans">
+              {{test.output}}
+            </div>
+
+            <!-- 错误提示 -->
+            <div v-if="test.error" class="text-xs text-rose-400 font-bold p-2.5 rounded bg-rose-950/40 border border-rose-800/50">
+              ⚠️ {{test.error}}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部折叠区：⚙️ 高级底层状态与系统设置 -->
+      <div class="border border-slate-800 rounded-xl overflow-hidden bg-surface-900/40">
+        <button @click="showAdvanced=!showAdvanced" class="w-full p-4 flex items-center justify-between text-left text-xs font-bold text-slate-400 hover:text-slate-200 transition-colors">
+          <span class="flex items-center gap-2">
+            <span>⚙️</span>
+            <span>高级底层状态与开发者设置（点击{{showAdvanced?'折叠':'展开'}}）</span>
+          </span>
+          <span class="text-slate-500 text-sm">{{showAdvanced ? '▲' : '▼'}}</span>
+        </button>
+
+        <div v-show="showAdvanced" class="p-4 border-t border-slate-800/80 space-y-4 bg-surface-900/80 text-xs">
+          <!-- 包含之前的浏览器环境卡片与底层操作 -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="p-3 bg-surface-800 rounded-lg border border-slate-700">
+              <div class="text-slate-400 mb-1">浏览器底层引擎</div>
+              <div class="font-bold text-white flex items-center gap-2">
+                <span>🖥️ 原生桌面窗口</span>
+                <span class="badge bg-indigo-900/60 text-indigo-300 border border-indigo-700/50 capitalize">{{browserMode.browserName || 'Chrome/Edge'}}</span>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">全时有头窗口模式，支持任务栏最小化与后台防降频保护。</p>
+            </div>
+            <div class="p-3 bg-surface-800 rounded-lg border border-slate-700">
+              <div class="text-slate-400 mb-1">窗口快捷控制</div>
+              <div class="flex items-center gap-2 mt-1">
+                <button @click="forceWindow" :disabled="windowActionLoading" class="btn-sm text-xs">
+                  {{windowActionLoading?'正在置顶...':'前台置顶窗口'}}
+                </button>
+                <button @click="toggleScreenshot" class="btn-sm text-xs">
+                  {{showScreenshot?'收起画面':'查看实时截图'}}
+                </button>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">可将后台浏览器呼出到前台，或在控制台直接查看渲染画面。</p>
+            </div>
+            <div class="p-3 bg-surface-800 rounded-lg border border-slate-700">
+              <div class="text-slate-400 mb-1">风控拦截重置</div>
+              <div class="mt-1">
+                <button @click="resetCaptcha" class="btn-sm text-xs border border-amber-700 text-amber-300 hover:text-white">
+                  🔄 一键解除拦截标志
+                </button>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">若偶发误判安全验证标志，可点击立即恢复 API 畅通。</p>
+            </div>
+          </div>
+
+          <!-- 后台实时截图 (如果展开) -->
+          <div v-if="showScreenshot" class="p-3 rounded-lg bg-surface-950 border border-slate-700 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-slate-300 font-medium">后台浏览器实时画面：</span>
+              <button @click="refreshScreenshot" :disabled="screenshot.loading" class="btn-sm text-xs">
+                {{screenshot.loading?'截图中...':'🔄 刷新截图'}}
+              </button>
+            </div>
+            <div v-if="screenshot.img" class="flex flex-col items-center">
+              <img :src="screenshot.img" class="max-h-72 rounded border border-slate-700 shadow" />
+              <span class="text-[10px] text-slate-500 mt-1 font-mono">截取时间: {{screenshot.time}}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -585,7 +704,8 @@ createApp({
     const cookieLoading = ref(false);
     const cookieMessage = ref('');
 
-    // Screenshot
+    // Screenshot & Advanced options
+    const showAdvanced = ref(false);
     const showScreenshot = ref(false);
     const screenshot = reactive({ img: '', loading: false, time: '' });
     const windowActionLoading = ref(false);
@@ -968,7 +1088,7 @@ createApp({
       tabs, icons, activeTab, session, browserMode, modeSwitching,
       currentTime, serverInfo, copyText, fmtDur, fmtTime,
       cookieInput, cookieLoading, cookieMessage,
-      showScreenshot, screenshot, windowActionLoading,
+      showAdvanced, showScreenshot, screenshot, windowActionLoading,
       showQrModal, qrState, qrStatusColor, toggleQrModal, startQrLogin,
       logs, test,
       fetchOverview, fetchSystem, openDoubaoWeb, toggleBrowserMode, forceWindow,

@@ -498,6 +498,36 @@ class BrowserClient:
         await self.start()
         log.info("BrowserClient restarted. ready=%s", self._ready)
 
+def bring_window_to_foreground():
+    """Attempt to bring the browser window to the foreground on Windows."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        targets = []
+
+        def _enum_proc(hwnd, lparam):
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    title = buf.value
+                    if any(k in title for k in ("豆包", "Doubao", "doubao.com", "Chrome", "Edge")):
+                        targets.append(hwnd)
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_enum_proc), 0)
+        for hwnd in targets:
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+    except Exception as e:
+        log.debug("bring_window_to_foreground error: %s", e)
+
+
     async def switch_mode(self, headless: bool = False) -> bool:
         """Ensure browser window is active, healthy, and brought to front (headed mode)."""
         self.headless = False
@@ -506,12 +536,14 @@ class BrowserClient:
                 try:
                     if await self.is_alive():
                         await self._page.bring_to_front()
+                        bring_window_to_foreground()
                         log.info("Browser window brought to front")
                         return True
                 except Exception:
                     pass
             log.info("Browser window not active, relaunching window...")
             await self.restart()
+            bring_window_to_foreground()
             return self._ready
 
     @classmethod
@@ -724,16 +756,16 @@ class BrowserClient:
 
 
     async def inject_cookies_and_reload(self, cookies: Dict[str, str]) -> bool:
-        """Inject cookies from QR login into browser context and reload.
-
-        After qr_login.py obtains session cookies via pure HTTP,
-        this method injects them into Playwright so that bdms.frontierSign
-        becomes available.
+        """Inject cookies from QR login or user import into browser context and reload.
 
         Returns True if login state is confirmed after reload.
         """
+        if not self._context or not self._page or not await self.is_alive():
+            log.info("inject_cookies: browser not active, restarting before inject...")
+            await self.restart()
+
         if not self._context or not self._page:
-            log.error("inject_cookies: browser not started")
+            log.error("inject_cookies: browser could not be started")
             return False
 
         # Build cookie list for Playwright

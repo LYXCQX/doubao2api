@@ -1459,18 +1459,32 @@ def create_app(
         raw = body.get("cookies", "")
         cookie_dict = {}
         if isinstance(raw, dict):
-            cookie_dict = raw
+            cookie_dict = {str(k).strip(): str(v).strip().strip('"\'') for k, v in raw.items()}
         elif isinstance(raw, str):
             raw_str = raw.strip()
-            if "=" not in raw_str and len(raw_str) > 10:
-                cookie_dict["sessionid"] = raw_str
-            else:
-                for part in raw_str.split(";"):
-                    part = part.strip()
-                    if not part or "=" not in part:
-                        continue
-                    k, v = part.split("=", 1)
-                    cookie_dict[k.strip()] = v.strip()
+            if raw_str.startswith("{") and raw_str.endswith("}"):
+                try:
+                    import json
+                    parsed = json.loads(raw_str)
+                    if isinstance(parsed, dict):
+                        cookie_dict = {str(k).strip(): str(v).strip().strip('"\'') for k, v in parsed.items()}
+                except Exception:
+                    pass
+            if not cookie_dict:
+                if "=" not in raw_str and len(raw_str) > 10:
+                    cookie_dict["sessionid"] = raw_str.strip('"\'')
+                else:
+                    for part in raw_str.split(";"):
+                        part = part.strip()
+                        if not part or "=" not in part:
+                            continue
+                        k, v = part.split("=", 1)
+                        cookie_dict[k.strip()] = v.strip().strip('"\'')
+
+        # Normalize sessionid key case
+        for k in list(cookie_dict.keys()):
+            if k.lower() == "sessionid" and k != "sessionid":
+                cookie_dict["sessionid"] = cookie_dict.pop(k)
 
         ok = await client.inject_cookies_and_reload(cookie_dict)
         return {

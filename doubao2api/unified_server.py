@@ -2571,6 +2571,15 @@ def run_server():
         )
         host = "127.0.0.1"
 
+    app = create_app(api_key=api_key or None, rpm_limit=rpm)
+
+    print(f"\n  Doubao API Server (Playwright Native)")
+    print(f"  Listening on http://{host}:{port}")
+    print(f"  Admin page: http://{host}:{port}/admin")
+    if api_key:
+        print(f"  API Key: {api_key[:4]}{'*' * (len(api_key) - 4)}")
+    print()
+
     auto_open = os.environ.get("DOUBAO_AUTO_OPEN_BROWSER", "true").lower() in ("true", "1", "yes")
     if auto_open:
         def _open_browser_when_ready():

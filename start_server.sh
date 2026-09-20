@@ -3,11 +3,12 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
+PORT="${DOUBAO_PORT:-9090}"
 echo "==============================================================="
 echo "  Doubao 2API - OpenAI Compatible Proxy"
-echo "  Address:      http://127.0.0.1:9090"
-echo "  Admin Panel:  http://127.0.0.1:9090/admin"
-echo "  OpenAI API:   http://127.0.0.1:9090/v1"
+echo "  Address:      http://127.0.0.1:${PORT}"
+echo "  Admin Panel:  http://127.0.0.1:${PORT}/admin"
+echo "  OpenAI API:   http://127.0.0.1:${PORT}/v1"
 echo "==============================================================="
 
 PY_CMD=""

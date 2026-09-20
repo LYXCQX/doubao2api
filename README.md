@@ -2,7 +2,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Docker](https://img.shields.io/badge/docker-supported-blue?logo=docker)](https://github.com/SeiShonagon520/doubao2api#docker-%E9%83%A8%E7%BD%B2%E6%8E%A8%E8%8D%90)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?logo=windows)](#-windows-本地一键使用推荐)
 [![GitHub Stars](https://img.shields.io/github/stars/SeiShonagon520/doubao2api?style=social)](https://github.com/SeiShonagon520/doubao2api/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/SeiShonagon520/doubao2api?style=social)](https://github.com/SeiShonagon520/doubao2api/network/members)
 [![GitHub Issues](https://img.shields.io/github/issues/SeiShonagon520/doubao2api)](https://github.com/SeiShonagon520/doubao2api/issues)
@@ -31,7 +31,7 @@
   - **假警报自愈解除**：真实验证码 DOM 探测，若屏幕上无实际滑块弹窗则自动解除拦截标记，告别服务偶发假死。
 - 🌐 **浏览器免配置自动降级（Auto Fallback）**：初次部署无需手动下载数百兆的驱动包，启动时自动检测并直接复用本机已安装的 Google Chrome 或 Microsoft Edge，开箱即跑。
 - 🖥️ **现代化 Admin 控制台**：内置可视化 Web 管理面板，支持扫码登录、Cookie 热导入、实时日志监控、一键解除风控拦截以及无头/窗口模式热切换。
-- 🐳 **全平台开箱即用部署**：提供便携式相对路径启动脚本（Windows `start_server.bat` / Linux `start_server.sh`）以及一键持久化存储的 `docker-compose.yml`。
+- 🪟 **Windows 本地极致一键体验**：专为 Windows 10/11 打造一键安装（`install.bat`）、启动（`start_server.bat`）、升级（`update.bat`）与自愈修复（`repair.bat`）工具链，无需复杂命令行与 Docker，双击即用。
 - 📦 **完整多模态能力**：
   - **多模态对话**：多轮对话、深度思考（思维链）、联网搜索，完整的 ChatCompletion 能力。
   - **多模态理解**：识图、读 PDF/Word/Excel/代码等 60+ 种文件格式，纯文本模型也能"看懂"图片和文档。
@@ -40,75 +40,85 @@
 
 ⚠️ **注意**：豆包网页客户端模型**不支持原生 Function Calling / Tool Use**，因此不适合需要操作本地代码仓库的 Coding Agent；非常适合对话翻译、知识问答及多媒体辅助。
 
+
 ## 目录
 
 - [项目背景与缘起](#-项目背景与缘起)
 - [核心特性与重构改进](#-核心特性与重构改进)
-- [原理](#原理)
-- [快速开始](#快速开始)
-  - [安装](#安装)
-  - [Docker 部署（推荐）](#docker-部署推荐)
-  - [QR 扫码登录（推荐，跨平台）](#qr-扫码登录推荐跨平台)
-  - [从 Session 文件创建客户端](#从-session-文件创建客户端)
-  - [流式输出](#流式输出)
-  - [三模式对话（快速/思考/专家）](#三模式对话快速思考专家)
-  - [图片上传 + 多模态对话](#图片上传--多模态对话)
-  - [文件上传 + 文档对话](#文件上传--文档对话)
-  - [图片生成（文生图）](#图片生成文生图)
-  - [视频生成（文生视频）](#视频生成文生视频)
-  - [音乐生成（文生音乐）](#音乐生成文生音乐)
+- [快速开始（Windows 本地一键推荐）](#-快速开始windows-本地一键推荐)
+  - [极速 3 步上手](#极速-3-步上手)
+  - [Windows 专属运维工具箱](#-windows-专属运维工具箱)
+  - [主流 AI 客户端一键配置指南](#-主流-ai-客户端一键配置指南)
 - [统一 API 服务（OpenAI 兼容）](#统一-api-服务openai-兼容)
-  - [部署](#部署)
   - [环境变量](#环境变量)
-  - [认证](#认证)
-  - [会话管理](#会话管理)
-  - [Admin Dashboard](#admin-dashboard)
+  - [认证与安全规范](#认证与安全规范)
+  - [OpenAI 兼容性免责与说明](#openai-兼容性免责与说明)
+  - [健康检查探针](#健康检查探针)
+  - [Admin Dashboard 控制台](#admin-dashboard-控制台)
   - [模型列表](#模型列表)
-  - [端点详细规范](#端点详细规范)
-  - [使用 OpenAI Python SDK](#使用-openai-python-sdk)
-  - [使用 curl](#使用-curl)
-- [Bot ID](#bot-id)
-- [底层模型与路由](#底层模型与路由)
-- [技术细节](#技术细节)
+- [Docker 实验性部署](#-docker-实验性部署-experimental)
 - [项目结构](#项目结构)
 
-## 原理
+---
 
-通过 QR 扫码登录（全平台）获取 `sessionid` 等认证 Cookie，然后调用豆包内部 SSE 流式端点实现对话、图片/视频/音乐生成。
+## ⚡ 快速开始（Windows 本地一键推荐）
 
-| 端点 | 协议 | 思考链 | 状态 |
-|------|------|--------|------|
-| `POST /samantha/chat/completion` | JSON 明文 sentEvent | **有** — `block_type=10040` + `10000` | ✅ 推荐主用 |
-| `POST /alice/message/stream_call_bot` | base64 编码 payload | **无** | 旧端点，已废弃 |
+### 极速 3 步上手
 
-- 认证: Cookie (`sessionid`, `ttwid`, `passport_csrf_token`)
-- 响应: Server-Sent Events 流
+1. **获取代码**：
+   - 点击 GitHub 页面右上角绿色 `Code` -> `Download ZIP` 下载并解压到本地任意目录（或使用 `git clone https://github.com/SeiShonagon520/doubao2api.git`）。
+2. **一键启动**：
+   - 直接双击根目录下的 **`start_server.bat`**。
+   - 首次运行会自动为您建立 `.venv` 隔离虚拟环境、安装所需依赖并配置通用 Chromium 内核。
+   - 启动完毕后，系统会在 3 秒内自动在您的默认浏览器中弹出管理控制台：`http://127.0.0.1:9090/admin`。
+3. **扫码即用**：
+   - 桌面会自动弹出豆包浏览器窗口，使用【豆包 App】直接扫码登录（或在管理控制台点击「导入 Cookie」直接粘贴您日常浏览器的 Cookie）。
+   - 登录成功后状态实时更新为绿色 `已登录`，您即可在各大 AI 客户端中自由调用！
 
-## 快速开始
+---
 
-### 安装
+### 🧰 Windows 专属运维工具箱
 
-```bash
-# 方式一：pip 安装（推荐）
-pip install git+https://github.com/SeiShonagon520/doubao2api.git
+为了保证普通用户不需要敲复杂的命令行，本项目在根目录下准备了完善的 Windows 批处理运维工具箱：
 
-# 方式二：从源码
-git clone https://github.com/SeiShonagon520/doubao2api.git
-cd doubao2api
-pip install -e .
-playwright install chromium
-```
+| 脚本文件 | 功能说明 | 适用场景 |
+|---------|---------|---------|
+| **`start_server.bat`** | **日常启动** | 日常双击运行，自动检测环境、防端口冲突并自动在默认浏览器打开控制台 |
+| **`install.bat`** | **环境初装** | 全自动创建隔离虚拟环境 `.venv`、配置清华镜像加速源、安装依赖与 Chromium |
+| **`update.bat`** | **一键升级** | 自动通过 Git 拉取最新代码并同步最新 Python 依赖与浏览器驱动，无痛升级 |
+| **`repair.bat`** | **故障自愈** | 一键清除残留死锁（窗口打不开）、强杀残留僵尸端口占用、诊断依赖健全度 |
 
-### Docker 部署（推荐）
+---
 
-```bash
-# 方式一：使用 docker-compose（推荐，自动持久化配置）
-docker compose up -d
+### 🔌 主流 AI 客户端一键配置指南
 
-# 方式二：使用 docker
-docker build -t doubao2api .
-docker run -d -p 9090:9090 -v doubao_data:/app/data doubao2api
-```
+服务启动成功后，本地提供标准的 OpenAI 兼容接口，可无缝接入各种开源和商业 AI 客户端：
+
+#### 1. 沉浸式翻译（Immersive Translate）
+- **翻译服务**：选择 `OpenAI`
+- **接口地址 (Base URL)**：`http://127.0.0.1:9090/v1`（注意末尾带 `/v1`）
+- **API Key**：任意填写（如 `sk-doubao`，未设密码时不校验）
+- **自定义模型**：`doubao` 或 `doubao-pro`
+
+#### 2. Cherry Studio / NextChat (ChatGPT-Next-Web) / Chatbox
+- **模型服务商**：`OpenAI`
+- **接口地址 / API Host**：`http://127.0.0.1:9090/v1`
+- **API 密钥**：任意填写（若配置了 `DOUBAO_API_KEY` 则填写对应密钥）
+- **可用模型**：
+  - `doubao`：极速对话模式（默认）
+  - `doubao-think`：思考模式（完整思维链输出）
+  - `doubao-expert`：专家模式（深度推理分析）
+  - `doubao-image`：图像生成
+  - `doubao-video`：视频生成
+  - `doubao-music`：音乐生成
+
+---
+
+### 🐳 Docker 实验性部署 (Experimental)
+
+Docker 容器化部署现已归档至实验目录，供 VPS、Linux 服务器与高级极客用户使用：
+- 配置文件与使用文档请查阅：[experimental/docker/README.md](experimental/docker/README.md)
+
 
 ### 前置条件
 
@@ -1020,26 +1030,52 @@ server {
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `DOUBAO_PORT` | `9090` | 监听端口 |
-| `DOUBAO_HOST` | `0.0.0.0` | 监听地址 |
-| `DOUBAO_API_KEY` | (空=无认证) | Bearer token。设为 `any` 接受任意非空 key |
-| `DOUBAO_RPM_LIMIT` | `30` | 每分钟请求限制（所有端点共享） |
-| `DOUBAO_HEADLESS` | `auto` | 浏览器运行模式：`auto` (未登录自动弹窗，已登录静默无头), `true` (纯无头), `false` (始终弹窗) |
-| `DOUBAO_BROWSER_DATA` | `~/.doubao_browser` | Chromium 持久化用户目录（保存登录凭证与指纹） |
-| `DOUBAO_AUTO_DELETE_CONV` | `true` | 即用即焚模式：请求完成后自动在豆包云端删除该临时会话，保持网页侧边栏干净 |
-| `DOUBAO_NOVNC_URL` | 自动推断 | Admin 面板中的 noVNC 地址 |
-| `DOUBAO_NOVNC_PASSWORD` | 空 | 自动拼接到 noVNC URL 的密码参数 |
+| `DOUBAO_HOST` | `0.0.0.0` | 监听地址（若未配置 API Key 且未开启允许未受保护绑定，将自动降级为 127.0.0.1） |
+| `DOUBAO_API_KEY` | (空=无认证) | 鉴权密钥。仅支持 HTTP Header 传递，设为 `any` 接受任意非空 key |
+| `ALLOW_UNPROTECTED_BIND` | `false` | 设为 `true` 允许在未设置 `DOUBAO_API_KEY` 时对外公网监听 `0.0.0.0` |
+| `DOUBAO_RPM_LIMIT` | `20` | 每分钟请求限制（所有端点共享） |
+| `DOUBAO_HEADLESS` | `auto` | 浏览器模式：`auto` (桌面端默认有头，Linux/Docker 无 DISPLAY 自动无头), `true` (始终无头), `false` (无图形界面时报错) |
+| `DOUBAO_BROWSER_DATA` | `~/.doubao_browser` | Chromium 持久化用户目录（保存登录凭证、指纹与 LocalStorage） |
+| `DOUBAO_AUTO_DELETE_CONV` | `true` | 即用即焚模式：请求完成后自动在豆包云端删除临时会话，保持网页侧边栏干净 |
+| `MAX_UPLOAD_SIZE_MB` | `20` | 文件与图片上传最大允许体积（MB） |
+| `MAX_DOWNLOAD_SIZE_MB` | `50` | 远程 `file_url` 引用下载最大允许体积（MB） |
+| `DEV_MODE` / `DEBUG` | `false` | 设为 `true` 允许调用 `/auth/eval` 执行浏览器 JS（生产环境默认禁用） |
 
-### 认证
+> **已废弃/无需配置的旧变量**：
+> - `DOUBAO_SESSION_FILE`：已由 `DOUBAO_BROWSER_DATA` 统一持久化存储，无需维护单独 json 文件。
+> - `DOUBAO_MS_TOKEN` / `DOUBAO_BOT_ID`：已由真实浏览器环境与内置路由引擎自动注入，无需手动指定。
 
-设置 `DOUBAO_API_KEY` 后，API 和 Admin 端点需要 Bearer token；不设置时不启用认证：
+### 认证与安全规范
 
-```
-Authorization: Bearer your-api-key
-```
+- **严格 Header 传递**：出于安全审计要求，**严禁通过 URL Query 参数传递密钥**（如 `?key=sk-...` 会被直接拒绝），所有请求必须通过 Header 传递：
+  ```http
+  Authorization: Bearer your-api-key
+  # 或
+  X-API-Key: your-api-key
+  ```
+- **公网暴露防护**：若未配置 `DOUBAO_API_KEY`，当 `DOUBAO_HOST` 设为 `0.0.0.0` 时，服务将自动降级监听为 `127.0.0.1` 本地回环，并在日志输出安全警告。
+- **敏感凭证脱敏**：`/admin/api/cookies` 接口仅返回 Cookie 名称、域名、有效期与掩码预览，杜绝明文 Token 泄漏。
+- **SSRF 防护**：对 `file_url` 远程下载请求实施严格的内网与本地回环拦截（屏蔽 `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` 等）。
 
-- `DOUBAO_API_KEY` 未设置时：无认证，所有请求直接通过
-- `DOUBAO_API_KEY=any`：接受任意非空 Bearer token
-- `DOUBAO_API_KEY=sk-xxx`：仅接受完全匹配的 token
+### OpenAI 兼容性免责与说明
+
+1. **Tool Calling (Function Calling)**：
+   - 豆包网页端官方模型**并不原生支持 OpenAI Function Calling**。
+   - 本项目通过 Prompt 系统级引导注入工具定义，并在模型生成阶段由后置解析引擎拦截、清洗与提取 XML/JSON 工具调用块，属于**模拟实现**。适合中轻度工具调用，对极度复杂的链式调用推荐使用官方商业 API。
+2. **多模态与文件上传限制**：
+   - 上传接口单文件限制默认 20MB（受底层字节跳动 TOS 存储与前端限制）。
+   - 支持主流文件类型（PDF、TXT、DOCX、Markdown、Python、JSON 等）与图像类型（PNG、JPG、WEBP）。
+3. **被忽略的 OpenAI 参数**：
+   - 豆包网页端固定了底层生成超参数，传入的 `frequency_penalty`, `presence_penalty`, `logit_bias`, `top_p` 会被安全忽略，不影响调用。
+
+### 健康检查探针
+
+| 探针路径 | 类型 | 说明 |
+|----------|------|------|
+| `GET /health/live` | Liveness | 进程存活检查：只要 FastAPI 服务正常运行即返回 200 `{"status": "alive"}`。Docker 容器 HEALTHCHECK 默认采用此探针。 |
+| `GET /health/ready` | Readiness | 就绪检查：检查浏览器客户端是否正常启动并已处于登录就绪状态。就绪返回 200，未就绪返回 503 与未就绪原因。 |
+| `GET /health` | Composite | 复合健康状态检查（向前兼容）：返回包含 `live`、`ready`、`logged_in` 及风控状态的完整 JSON。 |
+
 
 ### 会话管理与智能启动
 

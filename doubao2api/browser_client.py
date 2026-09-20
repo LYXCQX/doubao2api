@@ -18,7 +18,7 @@ import logging
 import os
 import time
 import uuid
-from typing import AsyncGenerator, Optional, Dict, Any, List
+from typing import AsyncGenerator, Optional, Dict, Any, List, Union
 from urllib.parse import urlencode
 
 import httpx
@@ -34,15 +34,58 @@ SAMANTHA_COMPLETION_URL = f"{DOUBAO_URL}/samantha/chat/completion"
 DEFAULT_BOT_ID = "7338286299411103781"
 
 
+def resolve_headless_mode(val: Optional[Union[bool, str]] = None) -> bool:
+    """
+    Resolve headless setting based on parameter, env DOUBAO_HEADLESS, and system display capability.
+    - 'auto' / None:
+        - Windows (os.name == 'nt') or macOS: False (headed for ease of login)
+        - Linux/other: False if DISPLAY or WAYLAND_DISPLAY is set, else True (headless)
+    - 'true' / True: True (always headless)
+    - 'false' / False: False. If on Linux/headless env without DISPLAY, raise RuntimeError.
+    """
+    if val is None:
+        env_val = os.environ.get("DOUBAO_HEADLESS", "auto").strip().lower()
+    elif isinstance(val, bool):
+        env_val = "true" if val else "false"
+    else:
+        env_val = str(val).strip().lower()
+
+    has_display = True
+    if os.name != "nt":
+        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+    if env_val in ("true", "1", "yes"):
+        return True
+    elif env_val in ("false", "0", "no"):
+        if not has_display:
+            raise RuntimeError(
+                "DOUBAO_HEADLESS is set to 'false', but no display server (DISPLAY / WAYLAND_DISPLAY) "
+                "is available in this environment. Please run with DOUBAO_HEADLESS=true, or provide an X11/wayland display."
+            )
+        return False
+    elif env_val == "auto":
+        if os.name == "nt":
+            return False
+        return not has_display
+    else:
+        log.warning("Unknown DOUBAO_HEADLESS='%s', defaulting to auto", env_val)
+        if os.name == "nt":
+            return False
+        return not has_display
+
+
 def bring_window_to_foreground():
     """Attempt to bring the browser window to the foreground on Windows."""
     if os.name != "nt":
         return
     try:
         import ctypes
+        from ctypes import wintypes
+
         user32 = ctypes.windll.user32
-        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
         targets = []
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def _enum_proc(hwnd, lparam):
             if user32.IsWindowVisible(hwnd):
@@ -67,8 +110,9 @@ def bring_window_to_foreground():
 class BrowserClient:
     """Manages Playwright for login and in-browser fetch for API calls."""
 
-    def __init__(self, headless: bool = False, user_data_dir: Optional[str] = None):
-        self.headless = False
+    def __init__(self, headless: Optional[Union[bool, str]] = None, user_data_dir: Optional[str] = None):
+        self._raw_headless = headless
+        self.headless = resolve_headless_mode(headless)
         self.user_data_dir = user_data_dir
         self._playwright = None
         self._context: Optional[BrowserContext] = None
@@ -325,9 +369,10 @@ class BrowserClient:
         return candidates
 
     async def start(self):
-        """Launch headed browser window, navigate to Doubao, init httpx client."""
-        self.headless = False
-        log.info("Starting BrowserClient (headed native desktop window)")
+        """Launch browser window or headless instance, navigate to Doubao, init httpx client."""
+        self.headless = resolve_headless_mode(self._raw_headless)
+        mode_str = "headless" if self.headless else "headed native desktop window"
+        log.info("Starting BrowserClient (%s)", mode_str)
         # Clean stale browser lock files if any were left behind from previous runs
         if self.user_data_dir and os.path.exists(self.user_data_dir):
             for lock_name in ("lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"):
@@ -538,22 +583,26 @@ class BrowserClient:
         await self.start()
         log.info("BrowserClient restarted. ready=%s", self._ready)
 
-    async def switch_mode(self, headless: bool = False) -> bool:
-        """Ensure browser window is active, healthy, and brought to front (headed mode)."""
-        self.headless = False
+    async def switch_mode(self, headless: Optional[Union[bool, str]] = None) -> bool:
+        """Ensure browser window is active, healthy, and optionally adjust headless mode."""
+        if headless is not None:
+            self._raw_headless = headless
+            self.headless = resolve_headless_mode(headless)
         async with self._mode_lock:
             if self._page and not self._page.is_closed():
                 try:
                     if await self.is_alive():
-                        await self._page.bring_to_front()
-                        bring_window_to_foreground()
-                        log.info("Browser window brought to front")
+                        if not self.headless:
+                            await self._page.bring_to_front()
+                            bring_window_to_foreground()
+                            log.info("Browser window brought to front")
                         return True
                 except Exception:
                     pass
-            log.info("Browser window not active, relaunching window...")
+            log.info("Browser window not active or mode switched, relaunching window...")
             await self.restart()
-            bring_window_to_foreground()
+            if not self.headless:
+                bring_window_to_foreground()
             return self._ready
 
     @classmethod

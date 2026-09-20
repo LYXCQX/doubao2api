@@ -17,10 +17,13 @@ import collections
 import json
 import logging
 import os
+import ipaddress
+import socket
 import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 try:
     from dotenv import load_dotenv
@@ -35,6 +38,47 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .browser_client import BrowserClient
+
+
+def is_safe_url(url: str) -> bool:
+    """
+    Validate that the URL is safe to fetch (prevents SSRF).
+    Disallows localhost, private IP ranges (RFC 1918), link-local, cloud metadata, and non-http/https.
+    """
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        if hostname.lower() in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return False
+
+        blocked_networks = [
+            ipaddress.ip_network("127.0.0.0/8"),
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+            ipaddress.ip_network("169.254.0.0/16"),
+            ipaddress.ip_network("0.0.0.0/8"),
+            ipaddress.ip_network("::1/128"),
+            ipaddress.ip_network("fc00::/7"),
+            ipaddress.ip_network("fe80::/10"),
+        ]
+
+        addr_info = socket.getaddrinfo(hostname, None)
+        for entry in addr_info:
+            ip_str = entry[4][0]
+            ip = ipaddress.ip_address(ip_str)
+            if any(ip in net for net in blocked_networks):
+                return False
+            if ip_str.startswith("169.254."):
+                return False
+        return True
+    except Exception:
+        return False
+
 from .tool_calling import (
     build_tool_system_prompt,
     convert_messages_with_tools,
@@ -276,21 +320,26 @@ def create_app(
         logging.getLogger("doubao2api.browser_client").setLevel(logging.INFO)
         logging.getLogger("doubao2api.browser_client").addHandler(logging.StreamHandler())
 
-        # Start browser client (permanently headed window for maximum anti-risk stealth & stability)
+        # Start browser client (auto-resolves headless mode from DOUBAO_HEADLESS)
         user_data_dir = os.environ.get(
             "DOUBAO_BROWSER_DATA",
             os.path.join(os.path.expanduser("~"), ".doubao_browser"),
         )
-        client = BrowserClient(headless=False, user_data_dir=user_data_dir)
-        await client.start()
+        client = BrowserClient(headless=None, user_data_dir=user_data_dir)
         _browser["client"] = client
+        _browser["startup_error"] = None
 
-        if client.is_ready:
-            log.info("Browser client ready (already logged in)")
-        else:
-            log.warning(
-                "Browser not logged in. Visit /auth or scan QR in the opened browser window."
-            )
+        try:
+            await client.start()
+            if client.is_ready:
+                log.info("Browser client ready (already logged in)")
+            else:
+                log.warning(
+                    "Browser not logged in. Visit /admin to scan QR code or import cookies."
+                )
+        except Exception as e:
+            log.error("Browser client failed to start: %s", e)
+            _browser["startup_error"] = str(e)
 
         # Start browser watchdog
         watchdog_task = asyncio.create_task(_browser_watchdog())
@@ -313,7 +362,10 @@ def create_app(
         watchdog_task.cancel()
         client = _browser.pop("client", None)
         if client:
-            await client.stop()
+            try:
+                await client.stop()
+            except Exception:
+                pass
 
     app = FastAPI(title="Doubao API", version="1.0.0", lifespan=lifespan)
 
@@ -347,24 +399,33 @@ def create_app(
         if not api_key:
             return
         auth = request.headers.get("Authorization", "")
-        token = auth[7:].strip() if auth.startswith("Bearer ") else auth.strip()
+        token = auth[7:].strip() if auth.startswith("Bearer ") else ""
         if not token:
-            token = request.query_params.get("key", "").strip()
+            token = request.headers.get("X-API-Key", "").strip()
+        # Query parameter ?key= is explicitly disallowed for security reasons
         if api_key == "any":
             if not token:
-                raise HTTPException(status_code=401, detail="API key required")
+                raise HTTPException(
+                    status_code=401,
+                    detail="API key required in Authorization or X-API-Key header",
+                )
             return
         if token != api_key:
             raise HTTPException(status_code=401, detail="Invalid API key")
 
     def _get_client() -> BrowserClient:
         client = _browser.get("client")
-        if client is None:
-            raise HTTPException(status_code=503, detail="Browser not initialized")
+        startup_err = _browser.get("startup_error")
+        if client is None or startup_err:
+            err_msg = f": {startup_err}" if startup_err else ""
+            raise HTTPException(
+                status_code=503,
+                detail=f"Browser client failed to start{err_msg}. Please check /admin for diagnosis.",
+            )
         if not client.is_ready and not client.needs_captcha:
             raise HTTPException(
                 status_code=503,
-                detail="Not logged in. Visit /auth to scan QR code.",
+                detail="Not logged in. Visit /admin to scan QR code or import cookies.",
             )
         return client
 
@@ -450,14 +511,35 @@ def create_app(
                 files.append({"uri": uploaded["uri"], "name": uploaded["name"], "size": uploaded["size"]})
                 continue
             if url.startswith("http://") or url.startswith("https://"):
+                if not is_safe_url(url):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Prohibited or unsafe URL for file_url (SSRF protection): {url[:80]}",
+                    )
                 parsed = urlparse(url)
                 inferred_name = parsed.path.rsplit("/", 1)[-1] or "downloaded_file"
                 if name == "file":
                     name = inferred_name
-                async with httpx.AsyncClient(timeout=120) as http_client:
-                    response = await http_client.get(url)
-                    response.raise_for_status()
-                    file_data = response.content
+                max_download_bytes = int(os.environ.get("MAX_DOWNLOAD_SIZE_MB", "50")) * 1024 * 1024
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as http_client:
+                        async with http_client.stream("GET", url) as response:
+                            response.raise_for_status()
+                            chunks = []
+                            downloaded_size = 0
+                            async for chunk in response.aiter_bytes():
+                                downloaded_size += len(chunk)
+                                if downloaded_size > max_download_bytes:
+                                    raise HTTPException(
+                                        status_code=413,
+                                        detail=f"Remote file exceeds maximum allowed size ({max_download_bytes // (1024*1024)}MB)",
+                                    )
+                                chunks.append(chunk)
+                            file_data = b"".join(chunks)
+                except HTTPException:
+                    raise
+                except Exception as exc:
+                    raise HTTPException(status_code=502, detail=f"Failed to fetch remote file: {exc}")
                 uploaded = await client.upload_file(file_data=file_data, filename=name)
                 files.append({"uri": uploaded["uri"], "name": uploaded["name"], "size": uploaded["size"]})
                 continue
@@ -485,15 +567,58 @@ def create_app(
 
     # ── Endpoints ──
 
+    @app.get("/health/live")
+    async def health_live():
+        """Liveness probe: returns 200 as long as the API server process is alive."""
+        return {"status": "alive"}
+
+    @app.get("/health/ready")
+    async def health_ready():
+        """Readiness probe: returns 200 if browser is logged in and ready, else 503."""
+        client = _browser.get("client")
+        startup_error = _browser.get("startup_error")
+        if startup_error:
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "not_ready", "reason": "startup_error", "error": startup_error},
+            )
+        if not client:
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "not_ready", "reason": "browser_not_initialized"},
+            )
+        if not client.is_ready:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "not_ready",
+                    "reason": "not_logged_in",
+                    "needs_captcha": client.needs_captcha,
+                    "last_error_code": client.last_error_code,
+                },
+            )
+        return {"status": "ready", "logged_in": True}
+
     @app.get("/health")
     async def health():
+        """Combined health status (backward compatible)."""
         client = _browser.get("client")
+        startup_error = _browser.get("startup_error")
         ready = client.is_ready if client else False
-        result = {"status": "ok" if ready else "not_ready", "logged_in": ready}
+        result = {
+            "status": "ok" if ready else "not_ready",
+            "logged_in": ready,
+            "live": True,
+            "ready": ready,
+        }
+        if startup_error:
+            result["startup_error"] = startup_error
         if client:
             result["consecutive_failures"] = client.consecutive_failures
             result["needs_captcha"] = client.needs_captcha
             result["last_error_code"] = client.last_error_code
+            result["headless"] = client.headless
+            result["browser_name"] = getattr(client, "browser_name", "chromium")
         result["expert_degraded"] = _expert_tracker.is_degraded
         return result
 
@@ -790,8 +915,25 @@ def create_app(
         if not file_field:
             raise HTTPException(status_code=400, detail="Missing file field")
 
-        file_data = await file_field.read()
         filename = file_field.filename or "file.txt"
+        ext = os.path.splitext(filename)[1].lower()
+        allowed_exts = {
+            ".txt", ".pdf", ".docx", ".doc", ".csv", ".xlsx", ".xls", ".pptx", ".ppt",
+            ".md", ".json", ".xml", ".yaml", ".yml", ".html", ".htm",
+            ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
+            ".mp3", ".wav", ".m4a", ".ogg", ".aac",
+            ".mp4", ".mov", ".avi", ".webm", ".mkv",
+        }
+        if ext and ext not in allowed_exts:
+            raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+
+        max_upload_bytes = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "20")) * 1024 * 1024
+        file_data = await file_field.read()
+        if len(file_data) > max_upload_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum allowed size ({max_upload_bytes // (1024*1024)}MB)",
+            )
 
         try:
             result = await client.upload_file(file_data, filename)
@@ -829,8 +971,19 @@ def create_app(
         upload = form.get("file") or form.get("image")
         if not upload:
             raise HTTPException(status_code=400, detail="Missing file field")
-        image_data = await upload.read()
         filename = upload.filename or "image.png"
+        ext = os.path.splitext(filename)[1].lower()
+        if ext and ext not in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"):
+            raise HTTPException(status_code=400, detail=f"Unsupported image extension: {ext}")
+
+        max_upload_bytes = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "20")) * 1024 * 1024
+        image_data = await upload.read()
+        if len(image_data) > max_upload_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Image exceeds maximum allowed size ({max_upload_bytes // (1024*1024)}MB)",
+            )
+
         try:
             result = await client.upload_image(image_bytes=image_data, filename=filename)
         except RuntimeError as exc:
@@ -1433,7 +1586,7 @@ def create_app(
 
     @app.get("/admin/api/cookies")
     async def admin_cookies(request: Request):
-        """Return current browser cookies."""
+        """Return current browser cookies (masked for security)."""
         _check_auth(request)
         client = _browser.get("client")
         if client is None or client._context is None:
@@ -1441,7 +1594,14 @@ def create_app(
         try:
             cookies = await client._context.cookies("https://www.doubao.com")
             cookies_list = [
-                {"name": c["name"], "value": c["value"], "length": len(c["value"])}
+                {
+                    "name": c["name"],
+                    "domain": c.get("domain", ""),
+                    "path": c.get("path", "/"),
+                    "expires": c.get("expires", -1),
+                    "length": len(c.get("value", "")),
+                    "masked": (c["value"][:3] + "..." + c["value"][-3:]) if len(c.get("value", "")) > 6 else "***",
+                }
                 for c in cookies
             ]
             return JSONResponse({"cookies": cookies_list, "total": len(cookies_list)})
@@ -1621,8 +1781,15 @@ def create_app(
 
     @app.post("/auth/eval")
     async def auth_eval(request: Request):
-        """Evaluate JS on the browser page (debug only)."""
+        """Evaluate JS on the browser page (debug/dev only)."""
         _check_auth(request)
+        is_dev = os.environ.get("DEV_MODE", "false").lower() in ("true", "1", "yes") or \
+                 os.environ.get("DEBUG", "false").lower() in ("true", "1", "yes")
+        if not is_dev:
+            raise HTTPException(
+                status_code=403,
+                detail="The /auth/eval endpoint is disabled in production. Set DEV_MODE=true or DEBUG=true to enable.",
+            )
         client = _browser.get("client")
         if client is None or client.page is None:
             raise HTTPException(status_code=503, detail="Browser not available")
@@ -1747,6 +1914,7 @@ def create_app(
     @app.get("/admin/api/browser/screenshot")
     async def admin_browser_screenshot(request: Request):
         """Return screenshot of browser page as PNG."""
+        _check_auth(request)
         from fastapi.responses import Response
         client = _browser.get("client")
         if client is None or client.page is None:
@@ -1760,6 +1928,7 @@ def create_app(
     @app.post("/admin/api/open-doubao")
     async def admin_open_doubao(request: Request):
         """Open doubao.com in system default browser for user login."""
+        _check_auth(request)
         import webbrowser
         try:
             webbrowser.open("https://www.doubao.com/chat/")
@@ -1770,6 +1939,7 @@ def create_app(
     @app.post("/admin/api/browser/force-window")
     async def admin_browser_force_window(request: Request):
         """Force launch or bring up the visible browser window."""
+        _check_auth(request)
         client = _browser.get("client")
         if client is None:
             raise HTTPException(status_code=503, detail="Browser not initialized")
@@ -1788,7 +1958,7 @@ def create_app(
                         if await modal.count() == 0:
                             btn = client.page.locator('button:has-text("登录")')
                             if await btn.count() > 0 and await btn.first.is_visible():
-                                await btn.first.click()
+                                 await btn.first.click()
                     except Exception:
                         pass
             return {"status": "ok", "mode": "window", "headless": client.headless, "browser_name": getattr(client, "browser_name", "chromium")}
@@ -1799,6 +1969,7 @@ def create_app(
     @app.post("/admin/api/browser/install-chromium")
     async def admin_install_chromium(request: Request):
         """Download and install official Playwright universal Chromium browser."""
+        _check_auth(request)
         import subprocess, sys
         try:
             proc = await asyncio.to_thread(
@@ -1831,6 +2002,17 @@ def run_server():
     port = int(os.environ.get("DOUBAO_PORT", "9090"))
     api_key = os.environ.get("DOUBAO_API_KEY", "")
     rpm = float(os.environ.get("DOUBAO_RPM_LIMIT", "20"))
+
+    # Security check: downgrade 0.0.0.0 to 127.0.0.1 if no API key is set
+    allow_unprotected = os.environ.get("ALLOW_UNPROTECTED_BIND", "false").lower() in ("true", "1", "yes")
+    if host == "0.0.0.0" and not api_key and not allow_unprotected:
+        log.warning(
+            "SECURITY WARNING: DOUBAO_HOST is '0.0.0.0' but no DOUBAO_API_KEY is configured! "
+            "To prevent unauthorized external access, automatically downgrading host to '127.0.0.1'. "
+            "Set DOUBAO_API_KEY or set ALLOW_UNPROTECTED_BIND=true if you intentionally want public open access."
+        )
+        host = "127.0.0.1"
+
     app = create_app(api_key=api_key or None, rpm_limit=rpm)
 
     print(f"\n  Doubao API Server (Playwright Native)")

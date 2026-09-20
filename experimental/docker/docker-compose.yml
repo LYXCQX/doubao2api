@@ -1,0 +1,23 @@
+services:
+  doubao2api:
+    build:
+      context: ../..
+      dockerfile: experimental/docker/Dockerfile
+    image: doubao2api:experimental
+    container_name: doubao2api
+    restart: unless-stopped
+    ports:
+      - "${DOUBAO_PORT:-9090}:9090"
+    environment:
+      - DOUBAO_HOST=${DOUBAO_HOST:-0.0.0.0}
+      - DOUBAO_PORT=${DOUBAO_PORT:-9090}
+      - DOUBAO_API_KEY=${DOUBAO_API_KEY:-}
+      - DOUBAO_HEADLESS=${DOUBAO_HEADLESS:-true}
+      - DOUBAO_AUTO_OPEN=false
+      - DOUBAO_BROWSER_DATA=/app/data/doubao_browser
+    volumes:
+      - doubao_data:/app/data
+
+volumes:
+  doubao_data:
+    driver: local

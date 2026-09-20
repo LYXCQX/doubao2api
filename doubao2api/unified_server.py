@@ -105,7 +105,7 @@ _dispatch_lock = asyncio.Lock()
 _last_dispatch_time: float = 0.0
 _MIN_DISPATCH_INTERVAL = float(os.environ.get("DOUBAO_MIN_INTERVAL", "0.2"))  # 200ms
 
-# ── Model definitions ────────────────────────────────────────
+# ── Model definitions & Aliases ──────────────────────────────
 
 CHAT_MODELS: Dict[str, int] = {
     "doubao-2.1-turbo": 0,
@@ -118,14 +118,63 @@ CHAT_MODELS: Dict[str, int] = {
     "doubao-expert": 3,
 }
 
+MODEL_ALIASES: Dict[str, str] = {
+    # OpenAI Chat models
+    "gpt-4o": "doubao-2.1-turbo",
+    "gpt-4o-mini": "doubao",
+    "gpt-4": "doubao-2.1-pro",
+    "gpt-4-turbo": "doubao-2.1-pro",
+    "gpt-3.5-turbo": "doubao",
+    "text-davinci-003": "doubao",
+    # Claude models
+    "claude-3-5-sonnet": "doubao-2.1-turbo",
+    "claude-3-5-sonnet-20241022": "doubao-2.1-turbo",
+    "claude-3-opus": "doubao-2.1-pro",
+    "claude-3-haiku": "doubao",
+    # DeepSeek models
+    "deepseek-chat": "doubao-2.1",
+    "deepseek-v3": "doubao-2.1",
+    "deepseek-reasoner": "doubao-think",
+    "deepseek-r1": "doubao-think",
+    # OpenAI Reasoning models
+    "o1": "doubao-think",
+    "o1-mini": "doubao-think",
+    "o1-preview": "doubao-think",
+    "o3-mini": "doubao-think",
+    # Image models
+    "dall-e-3": "doubao-image",
+    "dall-e-2": "doubao-image",
+}
+
+DEFAULT_FALLBACK_MODEL = os.environ.get("DOUBAO_DEFAULT_MODEL", "doubao-2.1-turbo")
+
 ALL_MODELS = [
     {"id": m, "object": "model", "owned_by": "doubao", "created": 0}
     for m in CHAT_MODELS
+] + [
+    {"id": m, "object": "model", "owned_by": "doubao-alias", "created": 0}
+    for m in MODEL_ALIASES
 ] + [
     {"id": "doubao-image", "object": "model", "owned_by": "doubao", "created": 0},
     {"id": "doubao-music", "object": "model", "owned_by": "doubao", "created": 0},
     {"id": "doubao-video", "object": "model", "owned_by": "doubao", "created": 0},
 ]
+
+# ── Recent Media Buffer (P2: Gallery) ────────────────────────
+from collections import deque
+_recent_media: deque = deque(maxlen=30)
+
+def _record_recent_media(media_type: str, url: str, prompt: str, cover_url: str = "", model: str = ""):
+    """Record generated image or video for admin gallery display."""
+    _recent_media.appendleft({
+        "id": f"med_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}",
+        "type": media_type,
+        "url": url,
+        "cover_url": cover_url or url,
+        "prompt": prompt,
+        "model": model,
+        "created_at": time.time(),
+    })
 
 
 # ── Expert Mode Quota Tracker ──
@@ -264,6 +313,8 @@ class ImageGenerationRequest(BaseModel):
     size: Optional[str] = "1024x1024"
     ratio: Optional[str] = None
     ref_image_key: Optional[str] = None
+    image: Optional[Any] = None
+    image_url: Optional[Any] = None
     response_format: Optional[str] = "url"
 
 # ── Application factory ──────────────────────────────────────
@@ -273,10 +324,11 @@ def create_app(
     *,
     api_key: Optional[str] = None,
     rpm_limit: float = 20.0,
+    browser_client: Optional[Any] = None,
 ) -> FastAPI:
     """Build and return a configured FastAPI application."""
 
-    _browser: Dict[str, Any] = {}  # holds BrowserClient instance
+    _browser: Dict[str, Any] = {"client": browser_client} if browser_client is not None else {}
 
     async def _browser_watchdog():
         """Background task: check browser health, auto-detect login, auto-restart on crash, auto-heal captcha."""
@@ -316,6 +368,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if browser_client is not None:
+            yield
+            return
+
         # Ensure browser_client logs are visible
         logging.getLogger("doubao2api.browser_client").setLevel(logging.INFO)
         logging.getLogger("doubao2api.browser_client").addHandler(logging.StreamHandler())
@@ -546,6 +602,99 @@ def create_app(
             raise HTTPException(status_code=400, detail=f"Unsupported file_url: {url[:80]}")
         return files
 
+    async def _resolve_image_to_key(client: BrowserClient, image_input: Any) -> str:
+        """Resolve TOS key, data URI, base64 string, or remote HTTP URL to a ByteDance TOS key."""
+        import base64
+        import mimetypes
+        from urllib.parse import urlparse
+
+        if not image_input:
+            return ""
+
+        # Handle dict wrapping, e.g. {"url": "..."} or {"image_url": "..."}
+        if isinstance(image_input, dict):
+            image_input = (
+                image_input.get("url")
+                or image_input.get("image_url")
+                or image_input.get("key")
+                or image_input.get("uri")
+                or image_input.get("b64_json")
+                or ""
+            )
+
+        if not isinstance(image_input, str):
+            raise HTTPException(status_code=400, detail="Invalid image input: expected string or dict")
+
+        image_str = image_input.strip()
+        if not image_str:
+            return ""
+
+        # 1. Already a TOS key
+        if image_str.startswith("tos-"):
+            return image_str
+
+        # 2. Data URI
+        if image_str.startswith("data:"):
+            try:
+                header, encoded = image_str.split(",", 1)
+                image_bytes = base64.b64decode(encoded)
+                mime_type = header[5:].split(";", 1)[0]
+                ext = mimetypes.guess_extension(mime_type) or ".png"
+                if ext == ".jpe":
+                    ext = ".jpg"
+                filename = f"ref_image{ext}"
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid image data URI: {exc}") from exc
+            uploaded = await client.upload_image(image_bytes=image_bytes, filename=filename)
+            return uploaded.get("uri", "")
+
+        # 3. HTTP or HTTPS URL
+        if image_str.startswith("http://") or image_str.startswith("https://"):
+            if not is_safe_url(image_str):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Prohibited or unsafe URL for image (SSRF protection): {image_str[:80]}",
+                )
+            parsed = urlparse(image_str)
+            filename = parsed.path.rsplit("/", 1)[-1] or "ref_image.png"
+            if not any(filename.lower().endswith(e) for e in (".png", ".jpg", ".jpeg", ".webp")):
+                filename = "ref_image.png"
+
+            max_download_bytes = int(os.environ.get("MAX_DOWNLOAD_SIZE_MB", "50")) * 1024 * 1024
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as http_client:
+                    async with http_client.stream("GET", image_str) as response:
+                        response.raise_for_status()
+                        chunks = []
+                        downloaded_size = 0
+                        async for chunk in response.aiter_bytes():
+                            downloaded_size += len(chunk)
+                            if downloaded_size > max_download_bytes:
+                                raise HTTPException(
+                                    status_code=413,
+                                    detail=f"Remote image exceeds maximum allowed size ({max_download_bytes // (1024*1024)}MB)",
+                                )
+                            chunks.append(chunk)
+                        image_bytes = b"".join(chunks)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"Failed to fetch remote image: {exc}")
+
+            uploaded = await client.upload_image(image_bytes=image_bytes, filename=filename)
+            return uploaded.get("uri", "")
+
+        # 4. Raw base64 string (without data: prefix)
+        try:
+            image_bytes = base64.b64decode(image_str)
+            if len(image_bytes) > 0:
+                uploaded = await client.upload_image(image_bytes=image_bytes, filename="ref_image.png")
+                return uploaded.get("uri", "")
+        except Exception:
+            pass
+
+        raise HTTPException(status_code=400, detail=f"Unsupported image format: {image_str[:80]}")
+
     # ── Request logging middleware ──
 
     @app.middleware("http")
@@ -641,14 +790,18 @@ def create_app(
             messages_raw = [m.model_dump(exclude_none=True) for m in body.messages]
             prompt = convert_messages_with_tools(messages_raw, body.tools)
         else:
-            use_deep_think = CHAT_MODELS.get(body.model)
-            if use_deep_think is None:
-                all_models = list(CHAT_MODELS.keys())
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unknown model '{body.model}'. Available: {', '.join(all_models)}",
-                )
-            model_name = body.model
+            requested_model = (body.model or "").strip()
+            target_model = requested_model
+            if target_model not in CHAT_MODELS:
+                if target_model in MODEL_ALIASES:
+                    target_model = MODEL_ALIASES[target_model]
+                    log.info("Model alias mapped: '%s' -> '%s'", requested_model, target_model)
+                else:
+                    log.warning("Unknown model '%s', automatically falling back to default '%s'", requested_model, DEFAULT_FALLBACK_MODEL)
+                    target_model = DEFAULT_FALLBACK_MODEL
+
+            use_deep_think = CHAT_MODELS.get(target_model, 0)
+            model_name = requested_model or target_model
             # Allow enable_thinking or reasoning_effort to dynamically control thinking mode
             if body.enable_thinking is True or (body.reasoning_effort and body.reasoning_effort in ("medium", "high")):
                 use_deep_think = 1 if use_deep_think != 3 else 3
@@ -809,12 +962,15 @@ def create_app(
         client = _get_client()
 
         ratio = body.ratio or _size_to_ratio(body.size)
+        ref_image_key = body.ref_image_key
+        if not ref_image_key and (body.image or body.image_url):
+            ref_image_key = await _resolve_image_to_key(client, body.image or body.image_url)
 
         try:
             result = await client.generate_image(
                 prompt=body.prompt,
                 ratio=ratio,
-                ref_image_key=body.ref_image_key,
+                ref_image_key=ref_image_key,
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
@@ -831,6 +987,78 @@ def create_app(
                 "url": img["url"],
                 "revised_prompt": body.prompt,
             })
+            _record_recent_media("image", img["url"], body.prompt, model=body.model)
+
+        return JSONResponse({
+            "created": int(time.time()),
+            "data": data,
+        })
+
+    @app.post("/v1/images/edits")
+    async def image_edits(request: Request):
+        """OpenAI-compatible image edits (img2img). Supports multipart/form-data and JSON."""
+        _check_auth(request)
+        await bucket.acquire()
+        client = _get_client()
+
+        content_type = request.headers.get("content-type", "")
+        prompt = ""
+        size = "1024x1024"
+        ratio = None
+        ref_image_key = None
+
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            prompt = str(form.get("prompt", "")).strip()
+            size = form.get("size") or "1024x1024"
+            ratio = form.get("ratio")
+            ref_image_key = form.get("ref_image_key")
+            file_field = form.get("image")
+            if not ref_image_key and file_field:
+                if hasattr(file_field, "read"):
+                    file_bytes = await file_field.read()
+                    filename = getattr(file_field, "filename", "ref_image.png") or "ref_image.png"
+                    uploaded = await client.upload_image(image_bytes=file_bytes, filename=filename)
+                    ref_image_key = uploaded.get("uri", "")
+                elif isinstance(file_field, str):
+                    ref_image_key = await _resolve_image_to_key(client, file_field)
+        else:
+            body = await request.json()
+            prompt = str(body.get("prompt", "")).strip()
+            size = body.get("size") or "1024x1024"
+            ratio = body.get("ratio")
+            ref_image_key = body.get("ref_image_key")
+            image_input = body.get("image") or body.get("image_url")
+            if not ref_image_key and image_input:
+                ref_image_key = await _resolve_image_to_key(client, image_input)
+
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Missing prompt")
+        if not ref_image_key:
+            raise HTTPException(status_code=400, detail="Missing reference image (image or ref_image_key)")
+
+        actual_ratio = ratio or _size_to_ratio(size)
+
+        try:
+            result = await client.generate_image(
+                prompt=prompt,
+                ratio=actual_ratio,
+                ref_image_key=ref_image_key,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+        images = result.get("images", [])
+        if not images:
+            raise HTTPException(status_code=502, detail="No images generated")
+
+        data = []
+        for img in images:
+            data.append({
+                "url": img["url"],
+                "revised_prompt": prompt,
+            })
+            _record_recent_media("image", img["url"], prompt, model="doubao-image-edit")
 
         return JSONResponse({
             "created": int(time.time()),
@@ -875,18 +1103,43 @@ def create_app(
         await bucket.acquire()
         client = _get_client()
 
-        body = await request.json()
-        prompt = body.get("prompt", "")
+        content_type = request.headers.get("content-type", "")
+        prompt = ""
+        ratio = None
+        ref_image_key = None
+
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            prompt = str(form.get("prompt", "")).strip()
+            ratio = form.get("ratio") or form.get("size")
+            ref_image_key = form.get("ref_image_key")
+            file_field = form.get("image") or form.get("file")
+            if not ref_image_key and file_field:
+                if hasattr(file_field, "read"):
+                    file_bytes = await file_field.read()
+                    filename = getattr(file_field, "filename", "ref_image.png") or "ref_image.png"
+                    uploaded = await client.upload_image(image_bytes=file_bytes, filename=filename)
+                    ref_image_key = uploaded.get("uri", "")
+                elif isinstance(file_field, str):
+                    ref_image_key = await _resolve_image_to_key(client, file_field)
+        else:
+            body = await request.json()
+            prompt = str(body.get("prompt", "")).strip()
+            ratio = body.get("ratio") or body.get("size")
+            ref_image_key = body.get("ref_image_key")
+            image_input = body.get("image") or body.get("image_url") or body.get("ref_image")
+            if not ref_image_key and image_input:
+                ref_image_key = await _resolve_image_to_key(client, image_input)
+
         if not prompt:
             raise HTTPException(status_code=400, detail="Missing prompt")
 
-        ratio = body.get("ratio") or body.get("size")
         if ratio and "x" in str(ratio):
             ratio = _size_to_ratio(ratio)
 
         try:
             result = await client.generate_video(
-                prompt=prompt, ratio=ratio,
+                prompt=prompt, ratio=ratio, ref_image_key=ref_image_key,
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
@@ -897,6 +1150,9 @@ def create_app(
             return JSONResponse({"created": int(time.time()), "data": [], "message": msg})
         if not videos:
             raise HTTPException(status_code=502, detail="No videos generated")
+
+        for vid in videos:
+            _record_recent_media("video", vid.get("video_url", ""), prompt, cover_url=vid.get("cover_url", ""), model="doubao-video")
 
         return JSONResponse({
             "created": int(time.time()),
@@ -1226,11 +1482,22 @@ def create_app(
                 yield from dc.get("content_block", [])
 
         try:
-            async for event in client.chat_completion(
+            event_iter = client.chat_completion(
                 prompt, use_deep_think=use_deep_think,
                 conversation_id=conversation_id or None,
                 bot_id=bot_id or None,
-            ):
+            ).__aiter__()
+
+            while True:
+                try:
+                    event = await asyncio.wait_for(event_iter.__anext__(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    # Emit SSE comment frame to keep connection alive through intermediate proxies
+                    yield ": keep-alive\n\n"
+                    continue
+                except StopAsyncIteration:
+                    break
+
                 if event.get("error"):
                     chunk = _make_chunk(
                         {"content": f"[Error {event.get('status')}]"}
@@ -1608,28 +1875,34 @@ def create_app(
         except Exception:
             return JSONResponse({"cookies": [], "total": 0})
 
-    @app.post("/admin/api/cookies/import")
-    async def admin_cookies_import(request: Request):
-        """Import cookie string or dict into browser context."""
-        _check_auth(request)
-        client = _browser.get("client")
-        if client is None:
-            raise HTTPException(status_code=503, detail="Browser not initialized")
-        body = await request.json()
-        raw = body.get("cookies", "")
-        cookie_dict = {}
+    def _parse_cookie_payload(raw: Any) -> Dict[str, str]:
+        """Parse various cookie input formats into a clean {name: value} dict.
+
+        Supports:
+        - dict: {"sessionid": "...", "other": "..."}
+        - list of dicts (e.g. from EditThisCookie / Cookie-Editor):
+            [{"name": "sessionid", "value": "..."}, ...]
+        - JSON string of dict or list: '{"sessionid": "..."}' or '[{"name": "..."}]'
+        - Semicolon-separated string: 'sessionid=xxx; other=yyy'
+        - Raw sessionid string (length > 10, no '=' or ';')
+        """
+        cookie_dict: Dict[str, str] = {}
         if isinstance(raw, dict):
             cookie_dict = {str(k).strip(): str(v).strip().strip('"\'') for k, v in raw.items()}
+        elif isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, dict) and "name" in item and "value" in item:
+                    cookie_dict[str(item["name"]).strip()] = str(item["value"]).strip().strip('"\'')
         elif isinstance(raw, str):
             raw_str = raw.strip()
-            if raw_str.startswith("{") and raw_str.endswith("}"):
+            if (raw_str.startswith("{") and raw_str.endswith("}")) or (raw_str.startswith("[") and raw_str.endswith("]")):
                 try:
                     import json
                     parsed = json.loads(raw_str)
-                    if isinstance(parsed, dict):
-                        cookie_dict = {str(k).strip(): str(v).strip().strip('"\'') for k, v in parsed.items()}
+                    return _parse_cookie_payload(parsed)
                 except Exception:
                     pass
+
             if not cookie_dict:
                 if "=" not in raw_str and len(raw_str) > 10:
                     cookie_dict["sessionid"] = raw_str.strip('"\'')
@@ -1646,6 +1919,19 @@ def create_app(
             if k.lower() == "sessionid" and k != "sessionid":
                 cookie_dict["sessionid"] = cookie_dict.pop(k)
 
+        return cookie_dict
+
+    @app.post("/admin/api/cookies/import")
+    async def admin_cookies_import(request: Request):
+        """Import cookie string or dict into browser context."""
+        _check_auth(request)
+        client = _browser.get("client")
+        if client is None:
+            raise HTTPException(status_code=503, detail="Browser not initialized")
+        body = await request.json()
+        raw = body.get("cookies", "")
+        cookie_dict = _parse_cookie_payload(raw)
+
         ok = await client.inject_cookies_and_reload(cookie_dict)
         return {
             "status": "ok" if ok else "fail",
@@ -1655,6 +1941,250 @@ def create_app(
             "has_sessionid": "sessionid" in cookie_dict,
             "ready": client.is_ready,
         }
+
+    # ── Multi-Account Pool Endpoints ──
+
+    @app.get("/admin/api/accounts")
+    async def admin_accounts_list(request: Request):
+        """List all accounts in the account pool."""
+        _check_auth(request)
+        client = _browser.get("client")
+        am = getattr(client, "account_manager", None)
+        if am is None:
+            from .account_manager import AccountManager
+            am = AccountManager()
+        return JSONResponse({
+            "strategy": am.strategy,
+            "active_account_id": am.active_account_id,
+            "accounts": am.list_accounts(mask_cookies=True),
+        })
+
+    @app.post("/admin/api/accounts/add")
+    async def admin_accounts_add(request: Request):
+        """Add or update an account with cookies in the pool."""
+        _check_auth(request)
+        client = _browser.get("client")
+        am = getattr(client, "account_manager", None)
+        if am is None:
+            from .account_manager import AccountManager
+            am = AccountManager()
+
+        body = await request.json()
+        name = str(body.get("name", "")).strip() or "新账号"
+        raw = body.get("cookies", "")
+        cookie_dict = _parse_cookie_payload(raw)
+
+        if not cookie_dict:
+            raise HTTPException(status_code=400, detail="未提供有效 Cookie 或 sessionid")
+
+        account_id = body.get("account_id")
+        acc = am.add_or_update_account(name=name, cookies=cookie_dict, account_id=account_id)
+        return JSONResponse({
+            "status": "ok",
+            "account": acc.to_dict(mask_cookies=True),
+        })
+
+    @app.post("/admin/api/accounts/save_current")
+    async def admin_accounts_save_current(request: Request):
+        """Save current active browser session as a named account in the pool."""
+        _check_auth(request)
+        client = _browser.get("client")
+        if client is None or not client._context:
+            raise HTTPException(status_code=503, detail="浏览器尚未运行或未就绪")
+
+        body = await request.json()
+        name = str(body.get("name", "")).strip() or f"已保存会话-{int(time.time()) % 10000}"
+
+        try:
+            cookies = await client._context.cookies("https://www.doubao.com")
+            cookie_dict = {c["name"]: c["value"] for c in cookies}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"获取浏览器 Cookie 失败: {e}")
+
+        if not cookie_dict or "sessionid" not in cookie_dict:
+            raise HTTPException(status_code=400, detail="当前浏览器未检测到已登录的 sessionid")
+
+        am = getattr(client, "account_manager", None)
+        if am is None:
+            from .account_manager import AccountManager
+            am = AccountManager(storage_dir=client.user_data_dir)
+            client.account_manager = am
+
+        acc = am.add_or_update_account(name=name, cookies=cookie_dict)
+        am.set_active_account(acc.id)
+        return JSONResponse({
+            "status": "ok",
+            "account": acc.to_dict(mask_cookies=True),
+        })
+
+    @app.post("/admin/api/accounts/switch")
+    async def admin_accounts_switch(request: Request):
+        """Manually switch active account in the browser."""
+        _check_auth(request)
+        client = _browser.get("client")
+        body = await request.json()
+        account_id = body.get("account_id")
+        if not account_id:
+            raise HTTPException(status_code=400, detail="Missing account_id")
+
+        if client is None:
+            raise HTTPException(status_code=503, detail="Browser not initialized")
+
+        if hasattr(client, "switch_to_account"):
+            ok = await client.switch_to_account(account_id)
+        else:
+            ok = False
+
+        am = getattr(client, "account_manager", None)
+        return JSONResponse({
+            "status": "ok" if ok else "fail",
+            "success": ok,
+            "active_account_id": am.active_account_id if am else None,
+            "logged_in": client.is_ready,
+        })
+
+    @app.post("/admin/api/accounts/delete")
+    async def admin_accounts_delete(request: Request):
+        """Delete an account from the pool."""
+        _check_auth(request)
+        client = _browser.get("client")
+        am = getattr(client, "account_manager", None)
+        if am is None:
+            from .account_manager import AccountManager
+            am = AccountManager()
+
+        body = await request.json()
+        account_id = body.get("account_id")
+        if not account_id:
+            raise HTTPException(status_code=400, detail="Missing account_id")
+
+        ok = am.delete_account(account_id)
+        return JSONResponse({"status": "ok" if ok else "not_found", "deleted": ok})
+
+    @app.post("/admin/api/accounts/strategy")
+    async def admin_accounts_strategy(request: Request):
+        """Set rotation strategy (failover / round_robin)."""
+        _check_auth(request)
+        client = _browser.get("client")
+        am = getattr(client, "account_manager", None)
+        if am is None:
+            from .account_manager import AccountManager
+            am = AccountManager()
+
+        body = await request.json()
+        strategy = str(body.get("strategy", "")).lower()
+        if strategy not in ("failover", "round_robin"):
+            raise HTTPException(status_code=400, detail="Strategy must be 'failover' or 'round_robin'")
+
+        am.strategy = strategy
+        am.save()
+        return JSONResponse({"status": "ok", "strategy": am.strategy})
+
+    @app.post("/admin/api/accounts/reset_quota")
+    async def admin_accounts_reset_quota(request: Request):
+        """Manually reset quota for an account."""
+        _check_auth(request)
+        client = _browser.get("client")
+        am = getattr(client, "account_manager", None)
+        if am is None:
+            from .account_manager import AccountManager
+            am = AccountManager()
+
+        body = await request.json()
+        account_id = body.get("account_id")
+        if not account_id:
+            raise HTTPException(status_code=400, detail="Missing account_id")
+
+        ok = am.reset_quota(account_id)
+        return JSONResponse({"status": "ok" if ok else "not_found", "reset": ok})
+
+    @app.post("/admin/api/accounts/rename")
+    async def admin_accounts_rename(request: Request):
+        """Rename an account in the pool."""
+        _check_auth(request)
+        client = _browser.get("client")
+        am = getattr(client, "account_manager", None)
+        if am is None:
+            from .account_manager import AccountManager
+            am = AccountManager()
+
+        body = await request.json()
+        account_id = body.get("account_id")
+        name = str(body.get("name", "")).strip()
+        if not account_id or not name:
+            raise HTTPException(status_code=400, detail="Missing account_id or name")
+
+        ok = am.rename_account(account_id, name)
+        return JSONResponse({"status": "ok" if ok else "not_found", "renamed": ok})
+
+    @app.post("/admin/api/accounts/probe_all")
+    async def admin_accounts_probe_all(request: Request):
+        """Probe and check validity of all accounts in the pool."""
+        _check_auth(request)
+        client = _browser.get("client")
+        am = getattr(client, "account_manager", None)
+        if am is None:
+            from .account_manager import AccountManager
+            am = AccountManager()
+
+        results = []
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            for acc in list(am.accounts.values()):
+                cookie_str = "; ".join(f"{k}={v}" for k, v in acc.cookies.items())
+                is_valid = False
+                err = ""
+                if client and client.is_ready and acc.id == am.active_account_id:
+                    is_valid = True
+                else:
+                    try:
+                        headers = {
+                            "Cookie": cookie_str,
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+                            "Referer": "https://www.doubao.com/chat/",
+                        }
+                        resp = await http.get("https://www.doubao.com/api/user/info", headers=headers)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if data.get("code") == 0 or data.get("data", {}).get("user_id"):
+                                is_valid = True
+                            else:
+                                err = data.get("msg") or "Session expired"
+                        elif "sessionid" in acc.cookies and len(acc.cookies["sessionid"]) >= 16:
+                            is_valid = True
+                        else:
+                            err = f"HTTP {resp.status_code}"
+                    except Exception as e:
+                        if "sessionid" in acc.cookies and len(acc.cookies["sessionid"]) >= 16:
+                            is_valid = True
+                        else:
+                            err = str(e)
+
+                status = "active" if is_valid else "invalid"
+                if acc.video_quota_exceeded:
+                    status = "quota_exceeded"
+                am.update_account_status(acc.id, status)
+                results.append({
+                    "id": acc.id,
+                    "name": acc.name,
+                    "status": status,
+                    "valid": is_valid,
+                    "error": err,
+                })
+
+        return JSONResponse({
+            "status": "ok",
+            "results": results,
+            "accounts": am.list_accounts(mask_cookies=True),
+        })
+
+    @app.get("/admin/api/media/recent")
+    async def admin_recent_media(request: Request):
+        """Return recent generated images and videos for admin gallery."""
+        _check_auth(request)
+        return JSONResponse({
+            "media": list(_recent_media),
+            "total": len(_recent_media),
+        })
 
     @app.post("/admin/api/probe")
     async def admin_probe(request: Request):
@@ -1994,6 +2524,13 @@ def create_app(
 # ── Server runner ──
 
 
+def _is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
+
+
 def run_server():
     """Start the uvicorn server with env-based configuration."""
     import uvicorn
@@ -2002,6 +2539,27 @@ def run_server():
     port = int(os.environ.get("DOUBAO_PORT", "9090"))
     api_key = os.environ.get("DOUBAO_API_KEY", "")
     rpm = float(os.environ.get("DOUBAO_RPM_LIMIT", "20"))
+
+    # Port conflict detection and friendly self-healing
+    if _is_port_in_use(port, "127.0.0.1"):
+        import urllib.request
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/health", headers={"User-Agent": "doubao2api-probe"})
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                if resp.status == 200:
+                    print(f"\n" + "=" * 60)
+                    print(f"  [提示] doubao2api 服务已经在端口 {port} 上正常运行中！")
+                    print(f"  管理控制台: http://127.0.0.1:{port}/admin")
+                    print(f"  无需重复启动。如需彻底重启，请先运行 repair.bat 停止旧服务。")
+                    print(f"=" * 60 + "\n")
+                    import webbrowser
+                    webbrowser.open(f"http://127.0.0.1:{port}/admin")
+                    return
+        except Exception:
+            pass
+        print(f"\n[警告] 本地端口 {port} 已被其他程序占用，服务无法启动！")
+        print(f"请使用 repair.bat 清理残留进程，或通过环境变量 DOUBAO_PORT=xxxx 指定其他端口。\n")
+        return
 
     # Security check: downgrade 0.0.0.0 to 127.0.0.1 if no API key is set
     allow_unprotected = os.environ.get("ALLOW_UNPROTECTED_BIND", "false").lower() in ("true", "1", "yes")
@@ -2013,13 +2571,29 @@ def run_server():
         )
         host = "127.0.0.1"
 
-    app = create_app(api_key=api_key or None, rpm_limit=rpm)
+    auto_open = os.environ.get("DOUBAO_AUTO_OPEN_BROWSER", "true").lower() in ("true", "1", "yes")
+    if auto_open:
+        def _open_browser_when_ready():
+            import time
+            import urllib.request
+            target_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
+            admin_url = f"http://{target_host}:{port}/admin"
+            for _ in range(20):
+                time.sleep(0.5)
+                try:
+                    req = urllib.request.Request(
+                        f"http://{target_host}:{port}/health",
+                        headers={"User-Agent": "doubao2api-probe"},
+                    )
+                    with urllib.request.urlopen(req, timeout=1) as resp:
+                        if resp.status == 200:
+                            import webbrowser
+                            webbrowser.open(admin_url)
+                            break
+                except Exception:
+                    pass
 
-    print(f"\n  Doubao API Server (Playwright Native)")
-    print(f"  Listening on http://{host}:{port}")
-    print(f"  Admin page: http://{host}:{port}/admin")
-    if api_key:
-        print(f"  API Key: {api_key[:4]}{'*' * (len(api_key) - 4)}")
-    print()
+        import threading
+        threading.Thread(target=_open_browser_when_ready, daemon=True).start()
 
     uvicorn.run(app, host=host, port=port, log_level="info")

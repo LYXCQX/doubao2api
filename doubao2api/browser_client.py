@@ -135,6 +135,9 @@ class BrowserClient:
         self._user_agent: str = ""
         self._browser_name: str = "Chromium"
 
+        from .account_manager import AccountManager
+        self.account_manager = AccountManager(storage_dir=self.user_data_dir)
+
     @property
     def browser_name(self) -> str:
         return self._browser_name
@@ -691,6 +694,21 @@ class BrowserClient:
         await self._wait_for_signing()  # still needed for upload endpoints
         log.info("Ready! device_id=%s, fetch_hook=%s", self._device_id, self._bridge_ready)
 
+        # Auto-register default account into account_manager if pool is empty
+        if hasattr(self, "account_manager") and len(self.account_manager.accounts) == 0:
+            try:
+                cookies = await self._context.cookies("https://www.doubao.com")
+                cookie_dict = {c["name"]: c["value"] for c in cookies}
+                if "sessionid" in cookie_dict:
+                    self.account_manager.add_or_update_account(
+                        name="默认账号",
+                        cookies=cookie_dict,
+                        account_id="acc_default",
+                    )
+                    log.info("Auto-registered current session as '默认账号' (acc_default) in account pool")
+            except Exception as e:
+                log.debug("Auto-register default account failed: %s", e)
+
     async def _extract_params(self):
         """Extract device_id, web_id, fp from localStorage/cookies."""
         for _ in range(5):
@@ -847,6 +865,35 @@ class BrowserClient:
         # Re-check login state
         await self._check_login_state()
         return self._ready
+
+    async def switch_to_account(self, account_id: str) -> bool:
+        """Switch browser session to specified account from the account pool."""
+        acc = self.account_manager.get_account(account_id)
+        if not acc:
+            log.error("switch_to_account: account %s not found in pool", account_id)
+            return False
+        if not acc.cookies:
+            log.error("switch_to_account: account %s has no cookies", account_id)
+            return False
+
+        if not self._context or not self._page or not await self.is_alive():
+            log.info("switch_to_account: browser not active, restarting...")
+            await self.restart()
+
+        if not self._context or not self._page:
+            return False
+
+        # Clear existing cookies to avoid session cross-contamination
+        try:
+            await self._context.clear_cookies()
+        except Exception as e:
+            log.warning("clear_cookies error before switch: %s", e)
+
+        ok = await self.inject_cookies_and_reload(acc.cookies)
+        if ok:
+            self.account_manager.set_active_account(acc.id)
+            log.info("Successfully switched to account %s (%s)", acc.id, acc.name)
+        return ok
     # ------------------------------------------------------------------
     # Signing & Cookies
     # ------------------------------------------------------------------
@@ -1779,12 +1826,14 @@ class BrowserClient:
         self,
         prompt: str,
         ratio: Optional[str] = None,
+        ref_image_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate video using /samantha/chat/completion (async 2-step).
 
         Args:
             prompt: Text description of the video to generate.
             ratio: Aspect ratio ("16:9", "9:16", "1:1").
+            ref_image_key: Optional image key for image-to-video (img2video).
 
         Returns:
             Dict with 'videos' list, each having video_url/cover_url/duration.
@@ -1795,10 +1844,14 @@ class BrowserClient:
         if ratio:
             content_data["ratio"] = ratio
 
+        attachments = []
+        if ref_image_key:
+            attachments.append({"type": "image", "key": ref_image_key})
+
         message: Dict[str, Any] = {
             "content": json.dumps(content_data, ensure_ascii=False),
             "content_type": 2020,
-            "attachments": [],
+            "attachments": attachments,
             "references": [],
             "skill": {
                 "skill_type": 17,
@@ -1841,6 +1894,15 @@ class BrowserClient:
             et = data.get("event_type")
             if et == 2005:
                 detail = data.get("event_data", "")
+                is_quota = any(k in str(detail) for k in ("今日生成次数已达上限", "次数已达上限", "额度已用尽", "达到今日上限", "次数超限"))
+                if is_quota and hasattr(self, "account_manager"):
+                    self.account_manager.mark_quota_exceeded(feature="video")
+                    if self.account_manager.has_alternative_accounts("video"):
+                        next_acc = self.account_manager.get_next_available_account("video")
+                        if next_acc:
+                            log.info("Video quota error 2005. Auto-switching to account %s (%s)...", next_acc.id, next_acc.name)
+                            if await self.switch_to_account(next_acc.id):
+                                return await self.generate_video(prompt=prompt, ratio=ratio, ref_image_key=ref_image_key)
                 raise RuntimeError(f"generate_video error: {str(detail)[:500]}")
             if et != 2001:
                 continue
@@ -1875,6 +1937,16 @@ class BrowserClient:
                         pass
 
         full_text = "".join(text_parts)
+        is_quota = any(k in full_text for k in ("今日生成次数已达上限", "次数已达上限", "额度已用尽", "达到今日上限", "次数超限"))
+        if is_quota and hasattr(self, "account_manager"):
+            self.account_manager.mark_quota_exceeded(feature="video")
+            if self.account_manager.has_alternative_accounts("video"):
+                next_acc = self.account_manager.get_next_available_account("video")
+                if next_acc:
+                    log.info("Video quota exceeded in full_text. Auto-switching to account %s (%s)...", next_acc.id, next_acc.name)
+                    if await self.switch_to_account(next_acc.id):
+                        return await self.generate_video(prompt=prompt, ratio=ratio, ref_image_key=ref_image_key)
+
         if "服务过载" in full_text or "重试" in full_text:
             raise RuntimeError("视频生成服务过载，请稍后重试")
 

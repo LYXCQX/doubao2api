@@ -322,7 +322,51 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
           </div>
           <p class="text-slate-500 text-[11px] pt-1">
             * 完美支持 Cherry Studio、Chatbox、NextChat、Cursor、沉浸式翻译、LobeChat 等所有支持 OpenAI 接口的工具。
-          </p>
+        </div>
+
+        <!-- 常见客户端一键配置卡片 (P1) -->
+        <div class="border border-slate-800 rounded-xl overflow-hidden bg-surface-900/50 p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-white flex items-center gap-1.5">
+              <span>🔌</span> 常见第三方客户端一键接入参数（已内置 OpenAI 兼容协议与模型别名）
+            </span>
+            <span class="text-[11px] text-slate-400">点击即可复制对应格式</span>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <!-- Cherry Studio -->
+            <div class="p-3 bg-surface-800/80 rounded-lg border border-slate-700/70 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-xs text-white">🍒 Cherry Studio</span>
+                <button @click="copyText(apiBaseUrl, '已复制 Cherry Studio 接口地址!')" class="btn-sm text-[10px] py-0.5 px-2">复制地址</button>
+              </div>
+              <div class="text-[11px] text-slate-400 space-y-0.5 font-mono">
+                <div>API 地址: <span class="text-indigo-300">{{apiBaseUrl}}</span></div>
+                <div>默认模型: <span class="text-emerald-300">doubao-2.1-turbo</span></div>
+              </div>
+            </div>
+            <!-- NextChat / Chatbox -->
+            <div class="p-3 bg-surface-800/80 rounded-lg border border-slate-700/70 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-xs text-white">💬 NextChat / Chatbox</span>
+                <button @click="copyText(API, '已复制 NextChat 接口地址 (不带 /v1)!')" class="btn-sm text-[10px] py-0.5 px-2">复制地址</button>
+              </div>
+              <div class="text-[11px] text-slate-400 space-y-0.5 font-mono">
+                <div>NextChat: <span class="text-indigo-300">{{API}}</span></div>
+                <div>Chatbox: <span class="text-indigo-300">{{apiBaseUrl}}</span></div>
+              </div>
+            </div>
+            <!-- 沉浸式翻译 -->
+            <div class="p-3 bg-surface-800/80 rounded-lg border border-slate-700/70 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-xs text-white">🌐 沉浸式翻译</span>
+                <button @click="copyText(apiBaseUrl, '已复制沉浸式翻译接口地址!')" class="btn-sm text-[10px] py-0.5 px-2">复制地址</button>
+              </div>
+              <div class="text-[11px] text-slate-400 space-y-0.5 font-mono">
+                <div>自定义地址: <span class="text-indigo-300">{{apiBaseUrl}}</span></div>
+                <div>模型名称: <span class="text-emerald-300">doubao</span></div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -536,10 +580,163 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
           <span class="font-bold">❌ 请求失败：</span>{{test.error}}
         </div>
       </div>
+
+      <!-- 最近多媒体生成画廊 (P2: Media Gallery) -->
+      <div class="card space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-base">🎨</span>
+            <div>
+              <h3 class="text-sm font-bold text-white">最近多媒体生成画廊（图生图 / 文生图 / 视频）</h3>
+              <p class="text-xs text-slate-400 mt-0.5">展示最近通过 API 生成的图片与视频预览（保留最近 30 条记录）</p>
+            </div>
+          </div>
+          <button @click="fetchRecentMedia" class="btn-sm text-xs">🔄 刷新画廊</button>
+        </div>
+
+        <div v-if="recentMedia.length" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div v-for="item in recentMedia" :key="item.id" class="p-3 bg-surface-900/80 rounded-xl border border-slate-800 space-y-2 flex flex-col justify-between">
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between text-[11px] text-slate-400">
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold" :class="item.type==='video'?'bg-purple-900/60 text-purple-300':'bg-emerald-900/60 text-emerald-300'">
+                  {{item.type === 'video' ? '🎬 视频' : '🖼️ 图片'}}
+                </span>
+                <span class="font-mono">{{fmtTime(item.created_at)}}</span>
+              </div>
+              <p class="text-xs text-slate-200 line-clamp-2 leading-relaxed" :title="item.prompt">{{item.prompt}}</p>
+            </div>
+            <div class="mt-2 rounded-lg overflow-hidden border border-slate-700/60 bg-black/40 flex items-center justify-center min-h-[120px]">
+              <template v-if="item.type==='image'">
+                <img :src="item.url" class="max-h-48 w-full object-cover cursor-pointer hover:opacity-90" @click="window.open(item.url, '_blank')" />
+              </template>
+              <template v-else-if="item.type==='video'">
+                <video :src="item.url" :poster="item.cover_url" controls class="max-h-48 w-full"></video>
+              </template>
+            </div>
+            <div class="flex items-center justify-between pt-1 text-[11px]">
+              <span class="text-slate-500 font-mono">{{item.model || '-'}}</span>
+              <button @click="copyText(item.url, '已复制媒体 URL!')" class="btn-sm text-[10px] py-0.5 px-2">复制链接</button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="py-8 text-center text-xs text-slate-500">
+          暂无多媒体生成记录。通过 <code>/v1/images/generations</code> 或 <code>/v1/video/generations</code> 生成后将在此自动展示。
+        </div>
+      </div>
     </section>
 
-    <!-- TAB 2: 系统信息与配置 -->
+    <!-- TAB 2: 账号池管理 -->
     <section v-show="activeTab===2" class="space-y-6">
+      <div class="card space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div>
+            <h3 class="text-base font-bold text-white flex items-center gap-2">
+              <span>👥 豆包账号池与自动轮换</span>
+              <span class="text-xs font-normal px-2 py-0.5 rounded-full border border-indigo-500/40 bg-indigo-950/40 text-indigo-300">
+                共 {{accounts.length}} 个账号
+              </span>
+            </h3>
+            <p class="text-xs text-slate-400 mt-0.5">支持多账号管理、视频/深度推理额度耗尽自动切换（Failover）与轮询调度（Round-Robin）</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="probeAllAccounts" :disabled="accountActionLoading || probingAccounts" class="btn-sm bg-sky-600/80 hover:bg-sky-500 text-white">
+              {{probingAccounts ? '⏳ 正在全量巡检...' : '🔍 一键巡检全部账号'}}
+            </button>
+            <button @click="saveCurrentAsAccount" :disabled="accountActionLoading" class="btn-sm bg-emerald-600/80 hover:bg-emerald-500 text-white">
+              💾 保存当前登录为账号
+            </button>
+            <button @click="showAddAccountModal=true" class="btn-sm btn-primary">
+              ➕ 导入新账号
+            </button>
+            <button @click="fetchAccounts" :disabled="accountActionLoading" class="btn-sm">
+              🔄 刷新
+            </button>
+          </div>
+        </div>
+
+        <!-- Strategy Selector -->
+        <div class="flex items-center justify-between p-3.5 bg-surface-900/60 rounded-xl border border-slate-800 text-xs">
+          <div class="flex items-center gap-2">
+            <span class="text-slate-400 font-medium">账号轮换策略：</span>
+            <span class="text-slate-300">{{accountStrategy === 'failover' ? '故障/额度切换（优先主账号，额度耗尽自动切换备用）' : '轮询调度（请求均匀分摊到所有账号）'}}</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button @click="setStrategy('failover')" :class="['px-3 py-1 rounded text-xs font-medium transition', accountStrategy==='failover'?'bg-indigo-600 text-white font-bold':'bg-slate-800 text-slate-400 hover:text-white']">
+              故障切换 (Failover)
+            </button>
+            <button @click="setStrategy('round_robin')" :class="['px-3 py-1 rounded text-xs font-medium transition', accountStrategy==='round_robin'?'bg-indigo-600 text-white font-bold':'bg-slate-800 text-slate-400 hover:text-white']">
+              轮询调度 (Round-Robin)
+            </button>
+          </div>
+        </div>
+
+        <!-- Accounts Table -->
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-xs text-slate-500 border-b border-slate-700">
+                <th class="py-2.5 px-3">账号名称</th>
+                <th class="py-2.5 px-3">状态</th>
+                <th class="py-2.5 px-3">视频额度</th>
+                <th class="py-2.5 px-3">Cookie凭证</th>
+                <th class="py-2.5 px-3">最后活跃</th>
+                <th class="py-2.5 px-3 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="acc in accounts" :key="acc.id" class="border-b border-slate-800 hover:bg-slate-800/40 transition-colors">
+                <td class="py-3 px-3">
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium text-white">{{acc.name}}</span>
+                    <button @click="openRenameModal(acc)" class="text-slate-400 hover:text-indigo-300 text-xs" title="修改账号备注">✏️</button>
+                    <span v-if="acc.is_active" class="px-2 py-0.5 rounded-full text-xs bg-emerald-950/80 text-emerald-400 border border-emerald-800 font-bold">
+                      当前使用中
+                    </span>
+                  </div>
+                  <div class="text-xs text-slate-500 font-mono">ID: {{acc.id}}</div>
+                </td>
+                <td class="py-3 px-3">
+                  <span v-if="acc.status==='active'" class="badge bg-emerald-950/60 text-emerald-400 border border-emerald-800/50">正常活跃</span>
+                  <span v-else-if="acc.status==='quota_exceeded'" class="badge bg-amber-950/60 text-amber-400 border border-amber-800/50">今日额度耗尽</span>
+                  <span v-else-if="acc.status==='invalid'" class="badge bg-rose-950/60 text-rose-400 border border-rose-800/50">Cookie 已失效</span>
+                  <span v-else class="badge bg-slate-800 text-slate-300 border border-slate-700">{{acc.status}}</span>
+                </td>
+                <td class="py-3 px-3 text-xs font-mono">
+                  <span :class="acc.video_quota_exceeded?'text-amber-400':'text-slate-300'">
+                    {{acc.video_quota_exceeded ? '已达上限 (次日重置)' : '正常可用'}}
+                  </span>
+                </td>
+                <td class="py-3 px-3 text-xs font-mono text-slate-400">
+                  {{acc.has_sessionid ? '已绑定 sessionid' : '未检测到会话'}}
+                </td>
+                <td class="py-3 px-3 text-xs font-mono text-slate-400">
+                  {{acc.last_used ? fmtTime(acc.last_used) : '从未'}}
+                </td>
+                <td class="py-3 px-3 text-right space-x-2">
+                  <button v-if="!acc.is_active" @click="switchAccount(acc.id)" :disabled="accountActionLoading" class="btn-sm bg-indigo-600/70 hover:bg-indigo-500 text-white">
+                    切换到此账号
+                  </button>
+                  <button v-if="acc.video_quota_exceeded" @click="resetQuota(acc.id)" :disabled="accountActionLoading" class="btn-sm bg-amber-600/70 hover:bg-amber-500 text-white" title="手动清除今日额度已耗尽标记">
+                    重置额度
+                  </button>
+                  <button @click="deleteAccount(acc.id)" :disabled="accountActionLoading" class="btn-sm bg-rose-900/60 hover:bg-rose-700 text-rose-200">
+                    删除
+                  </button>
+                </td>
+              </tr>
+              <tr v-if="!accounts.length">
+                <td colspan="6" class="py-8 text-center text-slate-500">
+                  账号池为空。点击上方【保存当前登录为账号】或【导入新账号】添加你的第一个备用账号。
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: 系统信息与配置 -->
+    <section v-show="activeTab===3" class="space-y-6">
       <div class="card space-y-4">
         <div class="flex items-center justify-between border-b border-slate-800 pb-3">
           <div>
@@ -592,8 +789,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
       </div>
     </section>
 
-    <!-- TAB 3: 请求日志 -->
-    <section v-show="activeTab===3">
+    <!-- TAB 4: 请求日志 -->
+    <section v-show="activeTab===4">
       <div class="card">
         <div class="flex items-center justify-between mb-4">
           <span class="text-xs text-slate-400">最近 100 条请求调用记录 (每 5 秒自动刷新)</span>
@@ -655,10 +852,62 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
   </div>
 </div>
 
+<!-- Add Account Modal -->
+<div v-if="showAddAccountModal" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+  <div class="bg-surface-900 border border-slate-700 rounded-xl p-6 max-w-lg w-full shadow-2xl space-y-4">
+    <div class="flex items-center justify-between">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <span>➕ 导入并添加豆包账号</span>
+      </h3>
+      <button @click="showAddAccountModal=false" class="text-slate-400 hover:text-white">✕</button>
+    </div>
+    <p class="text-xs text-slate-400 leading-relaxed">
+      输入账号自定义名称及已登录豆包的 Cookie（支持直接粘贴整串 Cookie、包含 sessionid 的 JSON 或直接填 sessionid 值）。
+    </p>
+    <div class="space-y-1.5">
+      <label class="text-xs text-slate-400 font-medium">账号名称（备注）</label>
+      <input v-model="newAccount.name" type="text" class="w-full text-xs" placeholder="例如：备用小号1" />
+    </div>
+    <div class="space-y-1.5">
+      <label class="text-xs text-slate-400 font-medium">Cookie 字符串 / JSON</label>
+      <textarea v-model="newAccount.cookies" rows="5" class="w-full text-xs font-mono" placeholder="粘贴 sessionid=xxx; 或整段 Cookie..."></textarea>
+    </div>
+    <div v-if="newAccountError" class="p-2.5 rounded bg-rose-950/60 border border-rose-800 text-rose-300 text-xs">
+      {{newAccountError}}
+    </div>
+    <div class="flex justify-end gap-2 pt-2">
+      <button @click="showAddAccountModal=false" class="btn-sm">取消</button>
+      <button @click="addAccount" :disabled="newAccountLoading" class="btn btn-primary btn-sm">
+        {{newAccountLoading ? '保存中...' : '确认添加'}}
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Rename Account Modal (P1) -->
+<div v-if="showRenameModal" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+  <div class="bg-surface-900 border border-slate-700 rounded-xl p-6 max-w-sm w-full shadow-2xl space-y-4">
+    <div class="flex items-center justify-between">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <span>✏️ 重命名账号备注</span>
+      </h3>
+      <button @click="showRenameModal=false" class="text-slate-400 hover:text-white">✕</button>
+    </div>
+    <div class="space-y-1.5">
+      <label class="text-xs text-slate-400 font-medium">账号名称（备注）</label>
+      <input v-model="renameData.name" @keyup.enter="confirmRename" type="text" class="w-full text-xs" placeholder="输入新的账号名称..." />
+    </div>
+    <div class="flex justify-end gap-2 pt-2">
+      <button @click="showRenameModal=false" class="btn-sm">取消</button>
+      <button @click="confirmRename" :disabled="!renameData.name.trim()" class="btn btn-primary btn-sm">保存</button>
+    </div>
+  </div>
+</div>
+
 </div>
 
 <script>
-const { createApp, ref, reactive, computed, onMounted } = Vue;
+const { createApp, ref, reactive, computed, onMounted, watch } = Vue;
 
 createApp({
   setup(){
@@ -690,6 +939,7 @@ createApp({
     const tabs = ref([
       { name: '状态与登录' },
       { name: 'API 调试测试' },
+      { name: '账号池管理' },
       { name: '系统信息与配置' },
       { name: '请求日志' }
     ]);
@@ -697,6 +947,7 @@ createApp({
     const icons = [
       '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>',
       '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+      '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
       '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3" stroke-width="2"/></svg>',
       '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>'
     ];
@@ -741,6 +992,203 @@ createApp({
     });
 
     const logs = ref([]);
+
+    // Account pool
+    const accounts = ref([]);
+    const accountStrategy = ref('failover');
+    const activeAccountId = ref('');
+    const accountActionLoading = ref(false);
+    const showAddAccountModal = ref(false);
+    const newAccount = reactive({ name: '', cookies: '' });
+    const newAccountLoading = ref(false);
+    const newAccountError = ref('');
+
+    async function fetchAccounts(){
+      try{
+        const d = await api('/admin/api/accounts');
+        accounts.value = d.accounts || [];
+        accountStrategy.value = d.strategy || 'failover';
+        activeAccountId.value = d.active_account_id || '';
+      }catch(e){
+        console.error('fetchAccounts error:', e);
+      }
+    }
+
+    async function switchAccount(id){
+      accountActionLoading.value = true;
+      try{
+        const r = await api('/admin/api/accounts/switch', {
+          method: 'POST',
+          body: JSON.stringify({ account_id: id })
+        });
+        if(r.status === 'ok' && r.success){
+          alert('账号切换成功！');
+          await Promise.all([fetchAccounts(), fetchSession()]);
+        }else{
+          alert('账号切换失败: ' + (r.message || '登录校验未通过'));
+        }
+      }catch(e){
+        alert('操作失败: ' + e.message);
+      }finally{
+        accountActionLoading.value = false;
+      }
+    }
+
+    async function saveCurrentAsAccount(){
+      const name = prompt('请输入保存的账号名称:', '账号-' + (accounts.value.length + 1));
+      if(!name) return;
+      accountActionLoading.value = true;
+      try{
+        const r = await api('/admin/api/accounts/save_current', {
+          method: 'POST',
+          body: JSON.stringify({ name })
+        });
+        if(r.status === 'ok'){
+          alert('当前登录已保存至账号池！');
+          await fetchAccounts();
+        }else{
+          alert('保存失败: ' + (r.detail || ''));
+        }
+      }catch(e){
+        alert('保存失败: ' + e.message);
+      }finally{
+        accountActionLoading.value = false;
+      }
+    }
+
+    async function addAccount(){
+      if(!newAccount.cookies.trim()){
+        newAccountError.value = '请输入 Cookie 内容';
+        return;
+      }
+      newAccountLoading.value = true;
+      newAccountError.value = '';
+      try{
+        const r = await api('/admin/api/accounts/add', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: newAccount.name.trim() || '新账号',
+            cookies: newAccount.cookies.trim()
+          })
+        });
+        if(r.status === 'ok'){
+          showAddAccountModal.value = false;
+          newAccount.name = '';
+          newAccount.cookies = '';
+          alert('账号添加成功！');
+          await fetchAccounts();
+        }else{
+          newAccountError.value = r.detail || '添加失败';
+        }
+      }catch(e){
+        newAccountError.value = e.message;
+      }finally{
+        newAccountLoading.value = false;
+      }
+    }
+
+    async function deleteAccount(id){
+      if(!confirm('确定要删除此账号吗？')) return;
+      accountActionLoading.value = true;
+      try{
+        await api('/admin/api/accounts/delete', {
+          method: 'POST',
+          body: JSON.stringify({ account_id: id })
+        });
+        await fetchAccounts();
+      }catch(e){
+        alert('删除失败: ' + e.message);
+      }finally{
+        accountActionLoading.value = false;
+      }
+    }
+
+    async function resetQuota(id){
+      accountActionLoading.value = true;
+      try{
+        await api('/admin/api/accounts/reset_quota', {
+          method: 'POST',
+          body: JSON.stringify({ account_id: id })
+        });
+        await fetchAccounts();
+      }catch(e){
+        alert('重置失败: ' + e.message);
+      }finally{
+        accountActionLoading.value = false;
+      }
+    }
+
+    async function setStrategy(val){
+      try{
+        const r = await api('/admin/api/accounts/strategy', {
+          method: 'POST',
+          body: JSON.stringify({ strategy: val })
+        });
+        if(r.status === 'ok'){
+          accountStrategy.value = r.strategy;
+        }
+      }catch(e){
+        alert('设置策略失败: ' + e.message);
+      }
+    }
+
+    // Rename account
+    const showRenameModal = ref(false);
+    const renameData = reactive({ id: '', name: '' });
+    function openRenameModal(acc){
+      renameData.id = acc.id;
+      renameData.name = acc.name;
+      showRenameModal.value = true;
+    }
+    async function confirmRename(){
+      if(!renameData.name.trim()) return;
+      accountActionLoading.value = true;
+      try{
+        const r = await api('/admin/api/accounts/rename', {
+          method: 'POST',
+          body: JSON.stringify({ account_id: renameData.id, name: renameData.name.trim() })
+        });
+        if(r.status === 'ok'){
+          showRenameModal.value = false;
+          await fetchAccounts();
+        }else{
+          alert('重命名失败: ' + (r.detail || ''));
+        }
+      }catch(e){
+        alert('重命名失败: ' + e.message);
+      }finally{
+        accountActionLoading.value = false;
+      }
+    }
+
+    // Probe all accounts
+    const probingAccounts = ref(false);
+    async function probeAllAccounts(){
+      probingAccounts.value = true;
+      try{
+        const r = await api('/admin/api/accounts/probe_all', { method: 'POST' });
+        if(r.status === 'ok'){
+          const results = r.results || [];
+          const validCount = results.filter(x => x.valid).length;
+          const invalidCount = results.length - validCount;
+          alert(`巡检完成！共 ${results.length} 个账号：${validCount} 个正常，${invalidCount} 个已失效。`);
+          await fetchAccounts();
+        }
+      }catch(e){
+        alert('巡检失败: ' + e.message);
+      }finally{
+        probingAccounts.value = false;
+      }
+    }
+
+    // Recent media gallery
+    const recentMedia = ref([]);
+    async function fetchRecentMedia(){
+      try{
+        const r = await api('/admin/api/media/recent');
+        recentMedia.value = r.media || [];
+      }catch(e){}
+    }
 
     // Testing playground
     const test = reactive({
@@ -815,7 +1263,7 @@ createApp({
     }
 
     async function fetchOverview(){
-      await Promise.all([fetchSession(), fetchSystem()]);
+      await Promise.all([fetchSession(), fetchSystem(), fetchAccounts()]);
     }
 
     async function openDoubaoWeb(){
@@ -1094,16 +1542,27 @@ createApp({
       }
     }
 
+    watch(activeTab, (val) => {
+      if(val === 0) fetchOverview();
+      if(val === 1) fetchRecentMedia();
+      if(val === 2) fetchAccounts();
+      if(val === 3) fetchSystem();
+      if(val === 4) fetchLogs();
+    });
+
     onMounted(()=>{
       fetchOverview();
       fetchLogs();
+      fetchRecentMedia();
       currentTime.value = new Date().toLocaleTimeString('zh-CN', { hour12: false });
       setInterval(() => {
         currentTime.value = new Date().toLocaleTimeString('zh-CN', { hour12: false });
       }, 1000);
       setInterval(() => {
         if(activeTab.value === 0) fetchSession();
-        if(activeTab.value === 3) fetchLogs();
+        if(activeTab.value === 1) fetchRecentMedia();
+        if(activeTab.value === 2) fetchAccounts();
+        if(activeTab.value === 4) fetchLogs();
       }, 5000);
     });
 
@@ -1117,7 +1576,15 @@ createApp({
       logs, test,
       fetchOverview, fetchSystem, openDoubaoWeb, toggleBrowserMode, forceWindow,
       toggleScreenshot, refreshScreenshot, submitCookie, fetchLogs, runTest, resetCaptcha,
-      installChromium, installingChromium
+      installChromium, installingChromium,
+      // Multi-account pool
+      accounts, accountStrategy, activeAccountId, accountActionLoading,
+      showAddAccountModal, newAccount, newAccountLoading, newAccountError,
+      fetchAccounts, switchAccount, saveCurrentAsAccount, addAccount,
+      deleteAccount, resetQuota, setStrategy,
+      // P0 / P1 / P2 additions
+      showRenameModal, renameData, openRenameModal, confirmRename,
+      probingAccounts, probeAllAccounts, recentMedia, fetchRecentMedia
     };
   }
 }).mount('#app');

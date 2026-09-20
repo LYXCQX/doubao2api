@@ -50,8 +50,12 @@ def test_web_ui_with_api_key():
     resp = client.get("/admin/api/system")
     assert resp.status_code == 401
 
-    # System API with query key should succeed
+    # System API with query key should be rejected (P0 security requirement)
     resp = client.get("/admin/api/system?key=secret123")
+    assert resp.status_code == 401
+
+    # System API with X-API-Key header should succeed
+    resp = client.get("/admin/api/system", headers={"X-API-Key": "secret123"})
     assert resp.status_code == 200
     sys_info = resp.json()
     assert "platform" in sys_info

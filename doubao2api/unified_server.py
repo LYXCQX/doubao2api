@@ -771,6 +771,63 @@ def create_app(
         result["expert_degraded"] = _expert_tracker.is_degraded
         return result
 
+    async def _resolve_captcha_or_failover(client: BrowserClient) -> None:
+        """Resolve captcha using 3-tier defense:
+        1. Auto-heal (if false alarm or already solved).
+        2. Auto-solver (humanized slider drag).
+        3. Account pool failover (switch to next healthy account).
+        4. Fallback: popup desktop window and raise 503.
+        """
+        if not client.needs_captcha:
+            return
+
+        # Tier 1: Check if captcha is still in DOM (false alarm or already solved)
+        if not await client.is_captcha_visible():
+            log.info("Auto-healed: cleared false alarm captcha flag (no visible captcha in DOM)")
+            client.clear_captcha()
+            client.record_success()
+            client._ready = True
+            return
+
+        # Tier 2: Attempt automated solving (humanized slider drag)
+        try:
+            solved = await client.try_auto_solve_captcha()
+            if solved:
+                log.info("Tier 2 auto-solver successfully bypassed captcha!")
+                return
+        except Exception as e:
+            log.warning("Tier 2 auto-solver failed: %s", e)
+
+        # Tier 3: Account pool failover (switch to next healthy account)
+        if client.account_manager and client.account_manager.accounts:
+            current_acc = client.account_manager.get_active_account()
+            if current_acc:
+                client.account_manager.mark_captcha_required(current_acc.id)
+            next_acc = client.account_manager.get_next_available_account()
+            if next_acc and (not current_acc or next_acc.id != current_acc.id):
+                log.warning(
+                    "Captcha hit on account %s. Auto-failing over to account %s (%s)...",
+                    current_acc.id if current_acc else "unknown",
+                    next_acc.id,
+                    next_acc.name,
+                )
+                await client.apply_account(next_acc)
+                client.clear_captcha()
+                client._ready = True
+                return
+
+        # Tier 4: Fallback - popup desktop window and raise 503
+        popped = await client.auto_popup_for_captcha()
+        action_msg = (
+            "已为您在桌面上激活并置顶浏览器窗口，请在窗口中拖拽/点击完成验证码后重试；"
+            if popped
+            else "请在控制台 http://127.0.0.1:9090/admin 点击【唤起窗口】完成人机验证；"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"触发字节跳动人机验证：{action_msg}亦可在控制台切换其他账号或导入 Cookie 恢复服务。",
+        )
+
     @app.get("/v1/models")
     async def list_models(request: Request):
         _check_auth(request)
@@ -815,24 +872,8 @@ def create_app(
         await bucket.acquire()
         client = _get_client()
 
-        # ── Self-healing captcha check: verify if a real captcha modal is actually visible in DOM ──
-        if client.needs_captcha:
-            if not await client.is_captcha_visible():
-                log.info("Auto-healed: cleared false alarm captcha flag (no visible captcha in DOM)")
-                client.clear_captcha()
-                client.record_success()
-                client._ready = True
-            else:
-                popped = await client.auto_popup_for_captcha()
-                action_msg = (
-                    "已为您在桌面上激活并置顶浏览器窗口，请在窗口中拖拽/点击完成验证码后重试；"
-                    if popped
-                    else "请在控制台 http://127.0.0.1:9090/admin 点击【唤起窗口】完成人机验证；"
-                )
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"触发字节跳动人机验证：{action_msg}亦可导入日常已登录 Cookie 恢复服务。",
-                )
+        # ── 3-Tier Captcha Defense & Account Failover ──
+        await _resolve_captcha_or_failover(client)
 
         # ── Request Dispatch Smoothing (anti-burst rate limit) ──
         global _last_dispatch_time
@@ -960,6 +1001,7 @@ def create_app(
         _check_auth(request)
         await bucket.acquire()
         client = _get_client()
+        await _resolve_captcha_or_failover(client)
 
         ratio = body.ratio or _size_to_ratio(body.size)
         ref_image_key = body.ref_image_key
@@ -1000,6 +1042,7 @@ def create_app(
         _check_auth(request)
         await bucket.acquire()
         client = _get_client()
+        await _resolve_captcha_or_failover(client)
 
         content_type = request.headers.get("content-type", "")
         prompt = ""
@@ -1102,6 +1145,7 @@ def create_app(
         _check_auth(request)
         await bucket.acquire()
         client = _get_client()
+        await _resolve_captcha_or_failover(client)
 
         content_type = request.headers.get("content-type", "")
         prompt = ""
@@ -2174,6 +2218,35 @@ def create_app(
         return JSONResponse({
             "status": "ok",
             "results": results,
+            "accounts": am.list_accounts(mask_cookies=True),
+        })
+
+    @app.post("/admin/api/accounts/clear_captcha")
+    async def admin_clear_account_captcha(request: Request):
+        """Clear captcha status for an account, restoring it to active."""
+        _check_auth(request)
+        client = _browser.get("client")
+        am = getattr(client, "account_manager", None)
+        if am is None:
+            from .account_manager import AccountManager
+            am = AccountManager()
+
+        body = await request.json()
+        account_id = body.get("account_id")
+        if not account_id:
+            raise HTTPException(status_code=400, detail="account_id is required")
+
+        success = am.clear_captcha_status(account_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Account not found or not in captcha state")
+
+        if client and am.active_account_id == account_id:
+            client.clear_captcha()
+            client._ready = True
+
+        return JSONResponse({
+            "status": "ok",
+            "message": f"已成功解除账号 {account_id} 的人机验证标记",
             "accounts": am.list_accounts(mask_cookies=True),
         })
 

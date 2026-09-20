@@ -234,6 +234,28 @@ class AccountManager:
         log.warning("Account %s (%s) marked as quota exceeded for %s", acc.id, acc.name, feature)
         self.save()
 
+    def mark_captcha_required(self, account_id: Optional[str] = None) -> None:
+        """Mark an account as requiring captcha verification."""
+        target_id = account_id or self.active_account_id
+        if not target_id or target_id not in self.accounts:
+            return
+
+        acc = self.accounts[target_id]
+        acc.status = "captcha"
+        log.warning("Account %s (%s) marked as status='captcha'", acc.id, acc.name)
+        self.save()
+
+    def clear_captcha_status(self, account_id: str) -> bool:
+        """Clear captcha status for an account, returning it to active."""
+        if account_id in self.accounts:
+            acc = self.accounts[account_id]
+            if acc.status == "captcha":
+                acc.status = "active"
+                log.info("Account %s (%s) captcha status cleared, restored to active", acc.id, acc.name)
+                self.save()
+                return True
+        return False
+
     def reset_quota(self, account_id: str) -> bool:
         """Manually reset quota for an account."""
         if account_id in self.accounts:

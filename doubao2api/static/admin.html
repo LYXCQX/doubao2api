@@ -698,6 +698,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
                 <td class="py-3 px-3">
                   <span v-if="acc.status==='active'" class="badge bg-emerald-950/60 text-emerald-400 border border-emerald-800/50">正常活跃</span>
                   <span v-else-if="acc.status==='quota_exceeded'" class="badge bg-amber-950/60 text-amber-400 border border-amber-800/50">今日额度耗尽</span>
+                  <span v-else-if="acc.status==='captcha'" class="badge bg-orange-950/60 text-orange-400 border border-orange-800/50">⚠️ 待验证码 (Captcha)</span>
                   <span v-else-if="acc.status==='invalid'" class="badge bg-rose-950/60 text-rose-400 border border-rose-800/50">Cookie 已失效</span>
                   <span v-else class="badge bg-slate-800 text-slate-300 border border-slate-700">{{acc.status}}</span>
                 </td>
@@ -715,6 +716,9 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-sh
                 <td class="py-3 px-3 text-right space-x-2">
                   <button v-if="!acc.is_active" @click="switchAccount(acc.id)" :disabled="accountActionLoading" class="btn-sm bg-indigo-600/70 hover:bg-indigo-500 text-white">
                     切换到此账号
+                  </button>
+                  <button v-if="acc.status==='captcha'" @click="clearCaptcha(acc.id)" :disabled="accountActionLoading" class="btn-sm bg-orange-600/80 hover:bg-orange-500 text-white" title="清除该账号的人机验证标记并恢复正常">
+                    解除验证
                   </button>
                   <button v-if="acc.video_quota_exceeded" @click="resetQuota(acc.id)" :disabled="accountActionLoading" class="btn-sm bg-amber-600/70 hover:bg-amber-500 text-white" title="手动清除今日额度已耗尽标记">
                     重置额度
@@ -1161,6 +1165,26 @@ createApp({
       }
     }
 
+    async function clearCaptcha(id){
+      accountActionLoading.value = true;
+      try{
+        const r = await api('/admin/api/accounts/clear_captcha', {
+          method: 'POST',
+          body: JSON.stringify({ account_id: id })
+        });
+        if(r.status === 'ok'){
+          alert('已成功解除该账号的人机验证标记！');
+          await fetchAccounts();
+        }else{
+          alert('操作失败: ' + (r.detail || r.message || ''));
+        }
+      }catch(e){
+        alert('操作失败: ' + e.message);
+      }finally{
+        accountActionLoading.value = false;
+      }
+    }
+
     // Probe all accounts
     const probingAccounts = ref(false);
     async function probeAllAccounts(){
@@ -1584,7 +1608,8 @@ createApp({
       deleteAccount, resetQuota, setStrategy,
       // P0 / P1 / P2 additions
       showRenameModal, renameData, openRenameModal, confirmRename,
-      probingAccounts, probeAllAccounts, recentMedia, fetchRecentMedia
+      probingAccounts, probeAllAccounts, recentMedia, fetchRecentMedia,
+      clearCaptcha
     };
   }
 }).mount('#app');
